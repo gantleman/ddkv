@@ -154,8 +154,8 @@ int main(int argc, char **argv)
     int have_id = 0;
     unsigned char myid[20];
     time_t tosleep = 0;
-	char id_file[256] = { "dht-example.id" };
-	char ip_file[256] = { "dht-example.ip" };
+	char id_file[256] = { "ddkv.id" };
+	char ip_file[256] = { "ddkv.ip" };
     int opt;
     int quiet = 0, ipv4 = 1, ipv6 = 1, safe = 1;
     struct sockaddr_in sin;
@@ -185,7 +185,7 @@ int main(int argc, char **argv)
     while(1) {
         opt = getopt(argc, argv, "sq46b:i:o:p:");
         if(opt < 0)
-            break;
+			goto usage;
 
         switch(opt) {
         case 'q': quiet = 1; break;
@@ -283,6 +283,17 @@ int main(int argc, char **argv)
 			freeaddrinfo(info);
 		}
 		fclose(fd);
+	}
+	else
+	{
+		perror("can not open ddkv.ip file!");
+		exit(0);
+	}
+
+	if (0 == num_bootstrap_nodes)
+	{
+		perror("number bootstrap node is empty!");
+		exit(0);
 	}
 
     /* If you set dht_debug to a stream, every action taken by the DHT will

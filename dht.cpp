@@ -134,6 +134,38 @@ set_nonblocking(int fd, int nonblocking)
 
 #endif
 
+#ifdef HAVE_MEMMEM
+
+static void *
+dht_memmem(const void *haystack, size_t haystacklen,
+const void *needle, size_t needlelen)
+{
+	return memmem(haystack, haystacklen, needle, needlelen);
+}
+
+#else
+
+static void *
+dht_memmem(const void *haystack, size_t haystacklen,
+const void *needle, size_t needlelen)
+{
+	const char *h = (char *)haystack;
+	const char *n = (char *)needle;
+	size_t i;
+
+	/* size_t is unsigned */
+	if (needlelen > haystacklen)
+		return NULL;
+
+	for (i = 0; i <= haystacklen - needlelen; i++) {
+		if (memcmp(h + i, n, needlelen) == 0)
+			return (void*)(h + i);
+	}
+	return NULL;
+}
+
+#endif
+
 /* We set sin_family to 0 to mark unused slots. */
 #if AF_INET == 0 || AF_INET6 == 0
 #error You lose
@@ -2598,38 +2630,6 @@ fail:
 #undef COPY
 #undef ADD_V
 
-#ifdef HAVE_MEMMEM
-
-static void *
-dht_memmem(const void *haystack, size_t haystacklen,
-const void *needle, size_t needlelen)
-{
-	return memmem(haystack, haystacklen, needle, needlelen);
-}
-
-#else
-
-static void *
-dht_memmem(const void *haystack, size_t haystacklen,
-const void *needle, size_t needlelen)
-{
-	const char *h = (char *)haystack;
-	const char *n = (char *)needle;
-	size_t i;
-
-	/* size_t is unsigned */
-	if (needlelen > haystacklen)
-		return NULL;
-
-	for (i = 0; i <= haystacklen - needlelen; i++) {
-		if (memcmp(h + i, n, needlelen) == 0)
-			return (void*)(h + i);
-	}
-	return NULL;
-}
-
-#endif
-
 static void
 process_message(pdht D, const unsigned char *buf, int buflen,
 const struct sockaddr *from, int fromlen,
@@ -2640,7 +2640,6 @@ dht_callback *callback, void *closure
 	b_element e;
 	b_parse((char*)buf, buflen, cur, e);
 
-//---public
 	unsigned char *tid, *y_return;
 	int tid_len, y_len;
 	b_find(&e, "t", &tid, tid_len);
@@ -2994,7 +2993,6 @@ dht_callback *callback, void *closure
 	return;
 
 dontread:
-	// if (y_return[0] == 'e')
 	debugf(D, "Unparseable message: ");
 	debug_printable(D, (unsigned char *)buf, buflen);
 	debugf(D, "\n");
