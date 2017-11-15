@@ -9,6 +9,8 @@
 #include <errno.h>
 #include <string.h>
 #include <fcntl.h>
+#include <string>
+
 #ifndef _WIN32
 #include <unistd.h>
 #include <sys/time.h>
@@ -103,8 +105,13 @@ callback(DHT D, void *closure,
 {
     if(event == DHT_EVENT_SEARCH_DONE)
         printf("Search done.\n");
-    else if(event == DHT_EVENT_VALUES)
-        printf("Received %d values.\n", (int)(data_len / 6));
+	else if (event == DHT_EVENT_VALUES)
+	{
+		std::string value;
+		value.append((char*)data, data_len);
+		printf("Received %s, %d values.\n", value.c_str(), (int)(data_len / 6));
+	}
+       
 }
 
 static const unsigned char zeroes[20] = { 0 };
@@ -430,23 +437,25 @@ int main(int argc, char **argv)
 				idea to reannounce every 28 minutes or so. */
 				char* pcmd = buf + SCCMD;
 				if (pcmd[0] == 's') {
-					int sp = 0;
 					char hs[256] = { 0 };
-					sscanf(&pcmd[2], "%s %d", &hs, &sp);
+					char sv[256] = { 0 };
+					sscanf(&pcmd[2], "%s %s", &hs, &sv);
 
 					SHA1_CONTEXT sc;
 					sha1_init(&sc);
 					sha1_write(&sc, (unsigned char*)hs, strlen(hs));
 					sha1_final(&sc);
 
-					printf("search key:%s port:%d hash:", hs, sp);
+					printf("search key:%s value:%s hash:", hs, sv);
 					print_hex(stdout, (unsigned char*)buf, 20);
 					printf("\n");
 
+					int len = strlen(sv);
+
 					if (s >= 0)
-						dht_search(D, sc.buf, sp, AF_INET, callback, NULL);
+						dht_search(D, sc.buf, len ? 1 : 0, AF_INET, callback, NULL, sv, len);
 					if (s6 >= 0)
-						dht_search(D, sc.buf, sp, AF_INET6, callback, NULL);
+						dht_search(D, sc.buf, len ? 1 : 0, AF_INET6, callback, NULL, sv, len);
 				}
 				else if (pcmd[0] == 'd') {/* For debugging, or idle curiosity. */
 					dht_dump_tables(D, stdout);

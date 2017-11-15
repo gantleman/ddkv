@@ -40,8 +40,8 @@ int dht_ping_node(DHT D, const struct sockaddr *sa, int salen);
 int dht_periodic(DHT D, const void *buf, size_t buflen,
                  const struct sockaddr *from, int fromlen,
                  time_t *tosleep);
-int dht_search(DHT D, const unsigned char *id, int port, int af,
-               dht_callback *callback, void *closure);
+int dht_search(DHT D, const unsigned char *id, int pg, int af,
+               dht_callback *callback, void *closure, const char* buf, int len);
 int dht_nodes(DHT D, int af,
               int *good_return, int *dubious_return, int *cached_return,
               int *incoming_return);

@@ -234,7 +234,7 @@ struct search {
 	int af;
 	time_t step_time;           /* the time of the last search_step */
 	unsigned char id[20];
-	unsigned short port;        /* 0 for pure searches */
+	unsigned short pg;        /* 0 for pure get*/
 	std::vector<char> buf;     //要发布的数据块替代port
 	int done;
 	struct search_node nodes[SEARCH_NODES];
@@ -246,11 +246,7 @@ struct search {
 
 struct peer {
 	time_t time;
-	unsigned char ip[16];
-	unsigned short len;
-	unsigned short port;
-	std::vector<char> buf;     //要发布的数据块替代port
-	unsigned short version;		//数据的版本
+	std::vector<char> buf;     //发布的数据块
 };
 
 /* The maximum number of hashes we're willing to track. */
@@ -270,7 +266,7 @@ struct peer {
 
 struct storage {
 	unsigned char id[20];
-	struct peer peer;
+	struct peer speer;
 	struct storage *next;
 };
 
@@ -365,7 +361,7 @@ static int send_get_peers(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *infohash, int want, int confirm);
 static int send_announce_peer(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
-	unsigned char *infohas, unsigned short port,
+	struct search *sr,
 	unsigned char *token, int token_len, int confirm);
 static int send_peer_announced(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len);
@@ -1157,7 +1153,7 @@ search_step(pdht D, struct search *sr)
 	}
 
 	if (all_done) {
-		if (sr->port == 0) {
+		if (sr->pg == 0) {
 			goto done;
 		}
 		else {
@@ -1181,7 +1177,7 @@ search_step(pdht D, struct search *sr)
 					make_tid(tid, "ap", sr->tid);
 					send_announce_peer(D, (struct sockaddr*)&n->ss,
 						sizeof(struct sockaddr_storage),
-						tid, 4, sr->id, sr->port,
+						tid, 4, sr,
 						n->token, n->token_len,
 						n->reply_time >= D->now.tv_sec - 15);
 					n->pinged++;
@@ -1269,8 +1265,8 @@ insert_search_bucket(pdht D, struct bucket *b, struct search *sr)
 /* Start a search.  If port is non-zero, perform an announce when the
    search is complete. */
 int
-dht_search(DHT iD, const unsigned char *id, int port, int af,
-dht_callback *callback, void *closure)
+dht_search(DHT iD, const unsigned char *id, int pg, int af,
+dht_callback *callback, void *closure, const char* buf, int len)
 {
 	pdht D = (pdht)iD;
 
@@ -1290,22 +1286,8 @@ dht_callback *callback, void *closure)
 	if (callback) {
 		st = find_storage(D, id);
 		if (st) {
-			unsigned short swapped;
-			unsigned char buf[18];
-
-			swapped = htons(st->peer.port);
-			if (st->peer.len == 4) {
-				memcpy(buf, st->peer.ip, 4);
-				memcpy(buf + 4, &swapped, 2);
-				(*callback)((DHT)D, closure, DHT_EVENT_VALUES, id,
-					(void*)buf, 6);
-			}
-			else if (st->peer.len == 16) {
-				memcpy(buf, st->peer.ip, 16);
-				memcpy(buf + 16, &swapped, 2);
-				(*callback)((DHT)D, closure, DHT_EVENT_VALUES6, id,
-					(void*)buf, 18);
-			}
+			(*callback)((DHT)D, closure, DHT_EVENT_VALUES, id,
+				(void*)&st->speer.buf[0], st->speer.buf.size());
 		}
 	}
 
@@ -1320,9 +1302,11 @@ dht_callback *callback, void *closure)
 	memcpy(sr->id, id, 20);
 	sr->done = 0;
 	sr->numnodes = 0;
-	sr->port = port;
+	sr->pg = pg;
 	sr->callback = callback;
 	sr->closure = closure;
+	sr->buf.resize(len);
+	memcpy(&sr->buf[0], buf, len);
 
 	insert_search_bucket(D, b, sr);
 
@@ -1359,25 +1343,9 @@ find_storage(pdht D, const unsigned char *id)
 
 static int
 storage_store(pdht D, const unsigned char *id,
-const struct sockaddr *sa, unsigned short port)
+const char* buf, int len)
 {
-	int len;
 	struct storage *st;
-	unsigned char *ip;
-
-	if (sa->sa_family == AF_INET) {
-		struct sockaddr_in *sin = (struct sockaddr_in*)sa;
-		ip = (unsigned char*)&sin->sin_addr;
-		len = 4;
-	}
-	else if (sa->sa_family == AF_INET6) {
-		struct sockaddr_in6 *sin6 = (struct sockaddr_in6*)sa;
-		ip = (unsigned char*)&sin6->sin6_addr;
-		len = 16;
-	}
-	else {
-		return -1;
-	}
 
 	st = find_storage(D, id);
 
@@ -1392,10 +1360,9 @@ const struct sockaddr *sa, unsigned short port)
 		D->numstorage++;
 	}
 	
-	st->peer.time = D->now.tv_sec;
-	st->peer.len = len;
-	memcpy(st->peer.ip, ip, len);
-	st->peer.port = port;
+	st->speer.time = D->now.tv_sec;
+	st->speer.buf.resize(len);
+	memcpy(&st->speer.buf[0], buf, len);
 	return 1;
 }
 
@@ -1404,7 +1371,7 @@ expire_storage(pdht D)
 {
 	struct storage *st = D->storage, *previous = NULL;
 	while (st) {
-		if (st->peer.time < D->now.tv_sec - 32 * 60) {
+		if (st->speer.time < D->now.tv_sec - 32 * 60) {
 			if (previous)
 				previous->next = st->next;
 			else
@@ -1631,22 +1598,10 @@ dht_dump_tables(DHT iD, FILE *f)
 	while (st) {
 		fprintf(f, "\nStorage ");
 		print_hex(f, st->id, 20);
-		char buf[100];
-		if (st->peer.len == 4) {
-			inet_ntop(AF_INET, st->peer.ip, buf, 100);
-		}
-		else if (st->peer.len == 16) {
-			buf[0] = '[';
-			inet_ntop(AF_INET6, st->peer.ip, buf + 1, 98);
-			strcat(buf, "]");
-		}
-		else {
-			strcpy(buf, "???");
-		}
-		fprintf(f, " %s:%u (%ld)",
-			buf, st->peer.port,
-			(long)(D->now.tv_sec - st->peer.time));
 
+		fprintf(f, "[");
+		print_hex(f, (unsigned char*)&st->speer.buf[0], st->speer.buf.size());
+		fprintf(f, "](%ld)", (long)(D->now.tv_sec - st->speer.time));
 		st = st->next;
 	}
 	fprintf(f, "\n\n");
@@ -2244,7 +2199,7 @@ int af, struct storage *st,
 const unsigned char *token, int token_len)
 {
 	char buf[2048];
-	int i = 0, rc, len;
+	int i = 0, rc;
 
 	rc = snprintf(buf + i, 2048 - i, "d1:rd2:id20:"); INC(i, rc, 2048);
 	COPY(buf, i, D->myid, 20, 2048);
@@ -2268,17 +2223,9 @@ const unsigned char *token, int token_len)
 		/* We treat the storage as a circular list, and serve a randomly
 		   chosen slice.  In order to make sure we fit within 1024 octets,
 		   we limit ourselves to 50 peers. */
-		len = af == AF_INET ? 4 : 16;
-		rc = snprintf(buf + i, 2048 - i, "6:valuesl"); INC(i, rc, 2048);
-		if (st->peer.len == len) {
-			unsigned short swapped;
-			swapped = htons(st->peer.port);
-			rc = snprintf(buf + i, 2048 - i, "%d:", len + 2);
-			INC(i, rc, 2048);
-			COPY(buf, i, st->peer.ip, len, 2048);
-			COPY(buf, i, &swapped, 2, 2048);
-		}
-		rc = snprintf(buf + i, 2048 - i, "e"); INC(i, rc, 2048);
+		rc = snprintf(buf + i, 2048 - i, "5:value"); INC(i, rc, 2048);
+		rc = snprintf(buf + i, 2048 - i, "%d:", st->speer.buf.size());INC(i, rc, 2048);
+		COPY(buf, i, &st->speer.buf[0], st->speer.buf.size(), 2048);
 	}
 	rc = snprintf(buf + i, 2048 - i, "e1:t%d:", tid_len); INC(i, rc, 2048);
 	COPY(buf, i, tid, tid_len, 2048);
@@ -2433,7 +2380,7 @@ fail:
 int
 send_announce_peer(pdht D, const struct sockaddr *sa, int salen,
 unsigned char *tid, int tid_len,
-unsigned char *infohash, unsigned short port,
+struct search *sr,
 unsigned char *token, int token_len, int confirm)
 {
 	char buf[512];
@@ -2442,9 +2389,10 @@ unsigned char *token, int token_len, int confirm)
 	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
 	COPY(buf, i, D->myid, 20, 512);
 	rc = snprintf(buf + i, 512 - i, "9:info_hash20:"); INC(i, rc, 512);
-	COPY(buf, i, infohash, 20, 512);
-	rc = snprintf(buf + i, 512 - i, "4:porti%ue5:token%d:", (unsigned)port,
-		token_len);
+	COPY(buf, i, sr->id, 20, 512);
+	rc = snprintf(buf + i, 512 - i, "5:value%d:", sr->buf.size()); INC(i, rc, 512);
+	COPY(buf, i, &sr->buf[0], sr->buf.size(), 512);
+	rc = snprintf(buf + i, 512 - i, "5:token%d:", token_len);
 	INC(i, rc, 512);
 	COPY(buf, i, token, token_len, 512);
 	rc = snprintf(buf + i, 512 - i, "e1:q13:announce_peer1:t%d:", tid_len);
@@ -2627,50 +2575,16 @@ const struct sockaddr *from, int fromlen
 				insert_search_node(D, id, from, fromlen, sr,
 					1, token, token_len);
 
-				b_element *e_values, *l_values;
-				b_find(r, "values", &l_values);
-				if (l_values != 0)
-				{
-					unsigned char values[2048], values6[2048];
-					int values_len = 2048, values6_len = 2048;
-					int j = 0, j6 = 0;
+				unsigned char* value;
+				int value_len;
+				b_find(r, "value", &value, value_len);
+				if (value_len == 0)
+					goto dontread;
 
-					b_get(l_values, 0, &e_values);
-					if (e_values != 0){
-						while (true){
-							if (e_values->buf.size() == 6){
-								memcpy(values + j, (void*)&e_values->buf[0], e_values->buf.size());
-								j += e_values->buf.size();
-							}
-							else if (e_values->buf.size() == 18){
-								memcpy(values + j6, (void*)&e_values->buf[0], e_values->buf.size());
-								j6 += e_values->buf.size();
-							}
-
-							if (j > values_len || j6 > values6_len)
-								break;
-
-							b_next(l_values, &e_values);
-							if (e_values == 0)
-								break;
-						}
-					}
-					values_len = j; values6_len = j6;
-
-					if (values_len > 0 || values6_len > 0) {
-
-						debugf(D, "Got values (%d+%d)!\n",
-							values_len / 6, values6_len / 18);
-						if (sr->callback) {
-							if (values_len > 0)
-								(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
-								(void*)values, values_len);
-
-							if (values6_len > 0)
-								(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES6, sr->id,
-								(void*)values6, values6_len);
-						}
-					}
+				if (sr->callback) {
+					if (value_len > 0)
+						(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
+						(void*)value, value_len);
 				}
 			}
 		}
@@ -2825,16 +2739,11 @@ const struct sockaddr *from, int fromlen
 			if (token_len == 0)
 				goto dontread;
 
-			int nport;
-			unsigned char* port;
-			int port_len;
-			b_find(a, "port", &port, port_len);
-			if (port_len == 0)
+			unsigned char* value;
+			int value_len;
+			b_find(a, "value", &value, value_len);
+			if (value_len == 0)
 				goto dontread;
-
-			std::string sport;
-			sport.append((char*)port, port_len);
-			nport = atoi(sport.c_str());
 
 			debugf(D, "Announce peer!\n");
 			new_node(D, id, from, fromlen, 1);
@@ -2850,13 +2759,13 @@ const struct sockaddr *from, int fromlen
 					203, "Announce_peer with wrong token");
 				return;
 			}
-			if (nport == 0) {
-				debugf(D, "Announce_peer with forbidden port %d.\n", port);
+			if (value_len == 0) {
+				debugf(D, "Announce_peer with forbidden port %d.\n", value_len);
 				send_error(D, from, fromlen, tid, tid_len,
 					203, "Announce_peer with forbidden port number");
 				return;
 			}
-			storage_store(D, info_hash, from, nport);
+			storage_store(D, info_hash, (const char*)value, value_len);
 			/* Note that if storage_store failed, we lie to the requestor.
 			This is to prevent them from backtracking, and hence
 			polluting the DHT. */
