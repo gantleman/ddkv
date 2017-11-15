@@ -228,37 +228,18 @@ struct search_node {
    the target 8 turn out to be dead. */
 #define SEARCH_NODES 14
 
+///注意search用于增改与查询两种操作
 struct search {
 	unsigned short tid;
 	int af;
 	time_t step_time;           /* the time of the last search_step */
 	unsigned char id[20];
 	unsigned short port;        /* 0 for pure searches */
+	std::vector<char> buf;     //要发布的数据块替代port
 	int done;
 	struct search_node nodes[SEARCH_NODES];
 	int numnodes;
 	struct search *next;
-};
-
-///Serial broadcast
-struct serial_node {
-	unsigned char id[20];
-	struct sockaddr_storage ss;
-	int sslen;
-	int pinged;
-	unsigned char token[40];
-	int token_len;
-	int replied;                /* whether we have received a reply */
-	int acked;                  /* whether they acked our announcement */
-};
-
-struct serial {
-	unsigned short tid;
-	int af;
-	time_t step_time;
-	std::list<serial_node> nodes;
-	std::vector<char> buf;
-	int num;
 };
 
 struct peer {
@@ -266,12 +247,9 @@ struct peer {
 	unsigned char ip[16];
 	unsigned short len;
 	unsigned short port;
+	std::vector<char> buf;     //要发布的数据块替代port
+	unsigned short version;		//数据的版本
 };
-	
-/* The maximum number of peers we store for a given hash. */
-#ifndef DHT_MAX_PEERS
-#define DHT_MAX_PEERS 2048
-#endif
 
 /* The maximum number of hashes we're willing to track. */
 #ifndef DHT_MAX_HASHES
@@ -290,8 +268,7 @@ struct peer {
 
 struct storage {
 	unsigned char id[20];
-	int numpeers, maxpeers;
-	struct peer *peers;
+	struct peer peer;
 	struct storage *next;
 };
 
@@ -358,8 +335,6 @@ typedef struct _dht
 	int token_bucket_tokens;
 
 	FILE *dht_debug;
-
-	std::map<int, serial> seriales;
 }*pdht, dht;
 
 static struct storage * find_storage(pdht D, const unsigned char *id);
@@ -1317,75 +1292,34 @@ dht_callback *callback, void *closure)
 		if (st) {
 			unsigned short swapped;
 			unsigned char buf[18];
-			int i;
 
-			debugf(D, "Found local data (%d peers).\n", st->numpeers);
-
-			for (i = 0; i < st->numpeers; i++) {
-				swapped = htons(st->peers[i].port);
-				if (st->peers[i].len == 4) {
-					memcpy(buf, st->peers[i].ip, 4);
-					memcpy(buf + 4, &swapped, 2);
-					(*callback)((DHT)D, closure, DHT_EVENT_VALUES, id,
-						(void*)buf, 6);
-				}
-				else if (st->peers[i].len == 16) {
-					memcpy(buf, st->peers[i].ip, 16);
-					memcpy(buf + 16, &swapped, 2);
-					(*callback)((DHT)D, closure, DHT_EVENT_VALUES6, id,
-						(void*)buf, 18);
-				}
+			swapped = htons(st->peer.port);
+			if (st->peer.len == 4) {
+				memcpy(buf, st->peer.ip, 4);
+				memcpy(buf + 4, &swapped, 2);
+				(*callback)((DHT)D, closure, DHT_EVENT_VALUES, id,
+					(void*)buf, 6);
+			}
+			else if (st->peer.len == 16) {
+				memcpy(buf, st->peer.ip, 16);
+				memcpy(buf + 16, &swapped, 2);
+				(*callback)((DHT)D, closure, DHT_EVENT_VALUES6, id,
+					(void*)buf, 18);
 			}
 		}
 	}
 
-	sr = D->searches;
-	while (sr) {
-		if (sr->af == af && id_cmp(sr->id, id) == 0)
-			break;
-		sr = sr->next;
+	sr = new_search(D);
+	if (sr == NULL) {
+		errno = ENOSPC;
+		return -1;
 	}
-
-	if (sr) {
-		if (sr->done)
-		{
-			/* We're reusing data from an old search.  Reusing the same tid
-				means that we can merge replies for both searches. */
-			int i;
-			sr->done = 0;
-			sr->step_time = 0;
-		again:
-			for (i = 0; i < sr->numnodes; i++) {
-				struct search_node *n;
-				n = &sr->nodes[i];
-				/* Discard any doubtful nodes. */
-				if (n->pinged >= 3 || n->reply_time < D->now.tv_sec - 7200) {
-					flush_search_node(n, sr);
-					goto again;
-				}
-				n->pinged = 0;
-				n->token_len = 0;
-				n->replied = 0;
-				n->acked = 0;		
-			}
-		}
-		else
-			return -1;///Reject other requests in searching
-	}
-	else {
-		sr = new_search(D);
-		if (sr == NULL) {
-			errno = ENOSPC;
-			return -1;
-		}
-		sr->af = af;
-		sr->tid = D->search_id++;
-		sr->step_time = 0;
-		memcpy(sr->id, id, 20);
-		sr->done = 0;
-		sr->numnodes = 0;
-	}
-
+	sr->af = af;
+	sr->tid = D->search_id++;
+	sr->step_time = 0;
+	memcpy(sr->id, id, 20);
+	sr->done = 0;
+	sr->numnodes = 0;
 	sr->port = port;
 
 	insert_search_bucket(D, b, sr);
@@ -1425,7 +1359,7 @@ static int
 storage_store(pdht D, const unsigned char *id,
 const struct sockaddr *sa, unsigned short port)
 {
-	int i, len;
+	int len;
 	struct storage *st;
 	unsigned char *ip;
 
@@ -1455,41 +1389,12 @@ const struct sockaddr *sa, unsigned short port)
 		D->storage = st;
 		D->numstorage++;
 	}
-
-	for (i = 0; i < st->numpeers; i++) {
-		if (st->peers[i].port == port && st->peers[i].len == len &&
-			memcmp(st->peers[i].ip, ip, len) == 0)
-			break;
-	}
-
-	if (i < st->numpeers) {
-		/* Already there, only need to refresh */
-		st->peers[i].time = D->now.tv_sec;
-		return 0;
-	}
-	else {
-		struct peer *p;
-		if (i >= st->maxpeers) {
-			/* Need to expand the array. */
-			struct peer *new_peers;
-			int n;
-			if (st->maxpeers >= DHT_MAX_PEERS)
-				return 0;
-			n = st->maxpeers == 0 ? 2 : 2 * st->maxpeers;
-			n = MIN(n, DHT_MAX_PEERS);
-			new_peers = (peer *)realloc(st->peers, n * sizeof(struct peer));
-			if (new_peers == NULL)
-				return -1;
-			st->peers = new_peers;
-			st->maxpeers = n;
-		}
-		p = &st->peers[st->numpeers++];
-		p->time = D->now.tv_sec;
-		p->len = len;
-		memcpy(p->ip, ip, len);
-		p->port = port;
-		return 1;
-	}
+	
+	st->peer.time = D->now.tv_sec;
+	st->peer.len = len;
+	memcpy(st->peer.ip, ip, len);
+	st->peer.port = port;
+	return 1;
 }
 
 static int
@@ -1497,20 +1402,7 @@ expire_storage(pdht D)
 {
 	struct storage *st = D->storage, *previous = NULL;
 	while (st) {
-		int i = 0;
-		while (i < st->numpeers) {
-			if (st->peers[i].time < D->now.tv_sec - 32 * 60) {
-				if (i != st->numpeers - 1)
-					st->peers[i] = st->peers[st->numpeers - 1];
-				st->numpeers--;
-			}
-			else {
-				i++;
-			}
-		}
-
-		if (st->numpeers == 0) {
-			free(st->peers);
+		if (st->peer.time < D->now.tv_sec - 32 * 60) {
 			if (previous)
 				previous->next = st->next;
 			else
@@ -1737,27 +1629,24 @@ dht_dump_tables(DHT iD, FILE *f)
 	while (st) {
 		fprintf(f, "\nStorage ");
 		print_hex(f, st->id, 20);
-		fprintf(f, " %d/%d nodes:", st->numpeers, st->maxpeers);
-		for (i = 0; i < st->numpeers; i++) {
-			char buf[100];
-			if (st->peers[i].len == 4) {
-				inet_ntop(AF_INET, st->peers[i].ip, buf, 100);
-			}
-			else if (st->peers[i].len == 16) {
-				buf[0] = '[';
-				inet_ntop(AF_INET6, st->peers[i].ip, buf + 1, 98);
-				strcat(buf, "]");
-			}
-			else {
-				strcpy(buf, "???");
-			}
-			fprintf(f, " %s:%u (%ld)",
-				buf, st->peers[i].port,
-				(long)(D->now.tv_sec - st->peers[i].time));
+		char buf[100];
+		if (st->peer.len == 4) {
+			inet_ntop(AF_INET, st->peer.ip, buf, 100);
 		}
+		else if (st->peer.len == 16) {
+			buf[0] = '[';
+			inet_ntop(AF_INET6, st->peer.ip, buf + 1, 98);
+			strcat(buf, "]");
+		}
+		else {
+			strcpy(buf, "???");
+		}
+		fprintf(f, " %s:%u (%ld)",
+			buf, st->peer.port,
+			(long)(D->now.tv_sec - st->peer.time));
+
 		st = st->next;
 	}
-
 	fprintf(f, "\n\n");
 	fflush(f);
 }
@@ -1881,7 +1770,6 @@ dht_uninit(DHT iD)
 	while (D->storage) {
 		struct storage *st = D->storage;
 		D->storage = D->storage->next;
-		free(st->peers);
 		free(st);
 	}
 
@@ -1913,6 +1801,7 @@ token_bucket(pdht D)
 	return 1;
 }
 
+///对当前k桶，下一个K桶，或则上一个k桶的临近节点搜索
 static int
 neighbourhood_maintenance(pdht D, int af)
 {
@@ -2354,7 +2243,7 @@ int af, struct storage *st,
 const unsigned char *token, int token_len)
 {
 	char buf[2048];
-	int i = 0, rc, j0, j, k, len;
+	int i = 0, rc, len;
 
 	rc = snprintf(buf + i, 2048 - i, "d1:rd2:id20:"); INC(i, rc, 2048);
 	COPY(buf, i, D->myid, 20, 2048);
@@ -2374,37 +2263,26 @@ const unsigned char *token, int token_len)
 		COPY(buf, i, token, token_len, 2048);
 	}
 
-	if (st && st->numpeers > 0) {
+	if (st) {
 		/* We treat the storage as a circular list, and serve a randomly
 		   chosen slice.  In order to make sure we fit within 1024 octets,
 		   we limit ourselves to 50 peers. */
-
 		len = af == AF_INET ? 4 : 16;
-		j0 = random() % st->numpeers;
-		j = j0;
-		k = 0;
-
 		rc = snprintf(buf + i, 2048 - i, "6:valuesl"); INC(i, rc, 2048);
-		do {
-			if (st->peers[j].len == len) {
-				unsigned short swapped;
-				swapped = htons(st->peers[j].port);
-				rc = snprintf(buf + i, 2048 - i, "%d:", len + 2);
-				INC(i, rc, 2048);
-				COPY(buf, i, st->peers[j].ip, len, 2048);
-				COPY(buf, i, &swapped, 2, 2048);
-				k++;
-			}
-			j = (j + 1) % st->numpeers;
-		} while (j != j0 && k < 50);
+		if (st->peer.len == len) {
+			unsigned short swapped;
+			swapped = htons(st->peer.port);
+			rc = snprintf(buf + i, 2048 - i, "%d:", len + 2);
+			INC(i, rc, 2048);
+			COPY(buf, i, st->peer.ip, len, 2048);
+			COPY(buf, i, &swapped, 2, 2048);
+		}
 		rc = snprintf(buf + i, 2048 - i, "e"); INC(i, rc, 2048);
 	}
-
 	rc = snprintf(buf + i, 2048 - i, "e1:t%d:", tid_len); INC(i, rc, 2048);
 	COPY(buf, i, tid, tid_len, 2048);
 	ADD_V(buf, i, 2048);
 	rc = snprintf(buf + i, 2048 - i, "1:y1:re"); INC(i, rc, 2048);
-
 	return dht_send(D, buf, i, 0, sa, salen);
 
 fail:
@@ -2917,7 +2795,7 @@ dht_callback *callback, void *closure
 				struct storage *st = find_storage(D, info_hash);
 				unsigned char token[TOKEN_SIZE];
 				make_token(D, from, 0, token);
-				if (st && st->numpeers > 0) {
+				if (st) {
 					debugf(D, "Sending found %s peers.\n",
 						from->sa_family == AF_INET6 ? " IPv6" : "");
 					send_closest_nodes(D, from, fromlen,

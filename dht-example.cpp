@@ -185,7 +185,7 @@ int main(int argc, char **argv)
     while(1) {
         opt = getopt(argc, argv, "sq46b:i:o:p:");
         if(opt < 0)
-			goto usage;
+			break;
 
         switch(opt) {
         case 'q': quiet = 1; break;
