@@ -240,6 +240,8 @@ struct search {
 	struct search_node nodes[SEARCH_NODES];
 	int numnodes;
 	struct search *next;
+	dht_callback *callback;
+	void *closure;
 };
 
 struct peer {
@@ -371,9 +373,7 @@ static int send_error(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
 	int code, const char *message);
 static void process_message(pdht D, const unsigned char *buf, int buflen,
-	const struct sockaddr *from, int fromlen,
-	dht_callback *callback, void *closure
-	);
+	const struct sockaddr *from, int fromlen);
 
 #ifdef __GNUC__
 __attribute__ ((format (printf, 1, 2)))
@@ -1138,7 +1138,7 @@ search_send_get_peers(pdht D, struct search *sr, struct search_node *n)
 /* When a search is in progress, we periodically call search_step to send
    further requests. */
 static void
-search_step(pdht D, struct search *sr, dht_callback *callback, void *closure)
+search_step(pdht D, struct search *sr)
 {
 	int i, j;
 	int all_done = 1;
@@ -1212,8 +1212,8 @@ search_step(pdht D, struct search *sr, dht_callback *callback, void *closure)
 
 done:
 	sr->done = 1;
-	if (callback)
-		(*callback)((DHT)D, closure,
+	if (sr->callback)
+		(*sr->callback)((DHT)D, sr->closure,
 		sr->af == AF_INET ?
 	DHT_EVENT_SEARCH_DONE : DHT_EVENT_SEARCH_DONE6,
 							sr->id, NULL, 0);
@@ -1321,6 +1321,8 @@ dht_callback *callback, void *closure)
 	sr->done = 0;
 	sr->numnodes = 0;
 	sr->port = port;
+	sr->callback = callback;
+	sr->closure = closure;
 
 	insert_search_bucket(D, b, sr);
 
@@ -1334,7 +1336,7 @@ dht_callback *callback, void *closure)
 	if (sr->numnodes < SEARCH_NODES)
 		insert_search_bucket(D, find_bucket(D, D->myid, af), sr);
 
-	search_step(D, sr, callback, closure);
+	search_step(D, sr);
 	D->search_time = D->now.tv_sec;
 	return 1;
 }
@@ -1922,8 +1924,7 @@ bucket_maintenance(pdht D, int af)
 int
 dht_periodic(DHT iD, const void *buf, size_t buflen,
 const struct sockaddr *from, int fromlen,
-time_t *tosleep,
-dht_callback *callback, void *closure)
+time_t *tosleep)
 {
 	pdht D = (pdht)iD;
 
@@ -1938,7 +1939,7 @@ dht_callback *callback, void *closure)
 				return -1;
 			}
 
-			process_message(D, (unsigned char*)buf, buflen, from, fromlen, callback, closure);
+			process_message(D, (unsigned char*)buf, buflen, from, fromlen);
 		}
 	}
 
@@ -1960,7 +1961,7 @@ dht_callback *callback, void *closure)
 		sr = D->searches;
 		while (sr) {
 			if (!sr->done && sr->step_time + 1 <= D->now.tv_sec) {
-				search_step(D, sr, callback, closure);
+				search_step(D, sr);
 			}
 
 			if (!sr->done) {
@@ -2510,8 +2511,7 @@ fail:
 
 static void
 process_message(pdht D, const unsigned char *buf, int buflen,
-const struct sockaddr *from, int fromlen,
-dht_callback *callback, void *closure
+const struct sockaddr *from, int fromlen
 )
 {
 	int cur = 0;
@@ -2661,13 +2661,13 @@ dht_callback *callback, void *closure
 
 						debugf(D, "Got values (%d+%d)!\n",
 							values_len / 6, values6_len / 18);
-						if (callback) {
+						if (sr->callback) {
 							if (values_len > 0)
-								(*callback)((DHT)D, closure, DHT_EVENT_VALUES, sr->id,
+								(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
 								(void*)values, values_len);
 
 							if (values6_len > 0)
-								(*callback)((DHT)D, closure, DHT_EVENT_VALUES6, sr->id,
+								(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES6, sr->id,
 								(void*)values6, values6_len);
 						}
 					}

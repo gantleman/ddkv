@@ -416,7 +416,7 @@ int main(int argc, char **argv)
 			{
 				buf[rc] = '\0';
 				rc = dht_periodic(D, buf, rc, (struct sockaddr*)&from, fromlen,
-					&tosleep, callback, NULL);
+					&tosleep);
 			}
 			else
 			{
@@ -461,7 +461,7 @@ int main(int argc, char **argv)
 				}
 			}
         } else {
-			rc = dht_periodic(D, NULL, 0, NULL, 0, &tosleep, callback, NULL);
+			rc = dht_periodic(D, NULL, 0, NULL, 0, &tosleep);
         }
         if(rc < 0) {
             if(errno == EINTR) {
