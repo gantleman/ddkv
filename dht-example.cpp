@@ -109,7 +109,7 @@ callback(DHT D, void *closure,
 	{
 		std::string value;
 		value.append((char*)data, data_len);
-		printf("Received %s, %d values.\n", value.c_str(), (int)(data_len / 6));
+		printf("Received %s, %d values.\n", value.c_str(), data_len);
 	}
        
 }

@@ -1305,8 +1305,10 @@ dht_callback *callback, void *closure, const char* buf, int len)
 	sr->pg = pg;
 	sr->callback = callback;
 	sr->closure = closure;
-	sr->buf.resize(len);
-	memcpy(&sr->buf[0], buf, len);
+	if (pg && len){
+		sr->buf.resize(len);
+		memcpy(&sr->buf[0], buf, len);
+	}
 
 	insert_search_bucket(D, b, sr);
 
@@ -2578,13 +2580,12 @@ const struct sockaddr *from, int fromlen
 				unsigned char* value;
 				int value_len;
 				b_find(r, "value", &value, value_len);
-				if (value_len == 0)
-					goto dontread;
-
-				if (sr->callback) {
-					if (value_len > 0)
-						(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
-						(void*)value, value_len);
+				if (value_len != 0){
+					if (sr->callback) {
+						if (value_len > 0)
+							(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
+							(void*)value, value_len);
+					}
 				}
 			}
 		}
