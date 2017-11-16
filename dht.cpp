@@ -21,14 +21,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-/* Please, please, please.
-
-   You are welcome to integrate this code in your favourite Bittorrent
-   client.  Please remember, however, that it is meant to be usable by
-   others, including myself.  This means no C++, no relicensing, and no
-   gratuitious changes to the coding style.  And please send back any
-   improvements to the author. */
-
 /* For memmem. */
 #define _GNU_SOURCE
 
@@ -243,6 +235,7 @@ struct search {
 	struct search *next;
 	dht_callback *callback;
 	void *closure;
+	std::map<std::vector<char>, int> result;//Return result ranking
 };
 
 struct peer {
@@ -358,6 +351,9 @@ static int send_closest_nodes(pdht D, const struct sockaddr *sa, int salen,
 	const unsigned char *id, int want,
 	int af, struct storage *st,
 	const unsigned char *token, int token_len);
+static int send_search(pdht D, const struct sockaddr *sa, int salen,
+	unsigned char *tid, int tid_len,
+	unsigned char *infohash, int want, int confirm);
 static int send_get_peers(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
 	unsigned char *infohash, int want, int confirm);
@@ -1101,7 +1097,41 @@ expire_searches(pdht D)
 
 /* This must always return 0 or 1, never -1, not even on failure (see below). */
 static int
-search_send_get_peers(pdht D, struct search *sr, struct search_node *n)
+search_send(pdht D, struct search *sr, struct search_node *n)
+{
+	struct node *node;
+	unsigned char tid[4];
+
+	if (n == NULL) {
+		int i;
+		for (i = 0; i < sr->numnodes; i++) {
+			if (sr->nodes[i].pinged < 3 && !sr->nodes[i].replied &&
+				sr->nodes[i].request_time < D->now.tv_sec - 15)
+				n = &sr->nodes[i];
+		}
+	}
+
+	if (!n || n->pinged >= 3 || n->replied ||
+		n->request_time >= D->now.tv_sec - 15)
+		return 0;
+
+	debugf(D, "Sending search.\n");
+	make_tid(tid, "sr", sr->tid);
+	debugf_hex(D, "tid:", tid, 4);
+	send_search(D, (struct sockaddr*)&n->ss, n->sslen, tid, 4, sr->id, -1,
+		n->reply_time >= D->now.tv_sec - 15);
+	n->pinged++;
+	n->request_time = D->now.tv_sec;
+	/* If the node happens to be in our main routing table, mark it
+	as pinged. */
+	node = find_node(D, n->id, n->ss.ss_family);
+	if (node) pinged(D, node, NULL);
+	return 1;
+}
+
+/* This must always return 0 or 1, never -1, not even on failure (see below). */
+static int
+get_peers_send(pdht D, struct search *sr, struct search_node *n)
 {
 	struct node *node;
 	unsigned char tid[4];
@@ -1201,7 +1231,7 @@ search_step(pdht D, struct search *sr)
 	
 	j = 0;
 	for (i = 0; i < sr->numnodes; i++) {
-		j += search_send_get_peers(D, sr, &sr->nodes[i]);
+		j += search_send(D, sr, &sr->nodes[i]);
 		if (j >= 3)
 			break;
 	}
@@ -2352,6 +2382,36 @@ const unsigned char *token, int token_len)
 }
 
 int
+send_search(pdht D, const struct sockaddr *sa, int salen,
+unsigned char *tid, int tid_len, unsigned char *infohash,
+int want, int confirm)
+{
+	char buf[512];
+	int i = 0, rc;
+
+	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
+	COPY(buf, i, D->myid, 20, 512);
+	rc = snprintf(buf + i, 512 - i, "9:info_hash20:"); INC(i, rc, 512);
+	COPY(buf, i, infohash, 20, 512);
+	if (want > 0) {
+		rc = snprintf(buf + i, 512 - i, "4:wantl%s%se",
+			(want & WANT4) ? "2:n4" : "",
+			(want & WANT6) ? "2:n6" : "");
+		INC(i, rc, 512);
+	}
+	rc = snprintf(buf + i, 512 - i, "e1:q6:search1:t%d:", tid_len);
+	INC(i, rc, 512);
+	COPY(buf, i, tid, tid_len, 512);
+	ADD_V(buf, i, 512);
+	rc = snprintf(buf + i, 512 - i, "1:y1:qe"); INC(i, rc, 512);
+	return dht_send(D, buf, i, confirm ? MSG_CONFIRM : 0, sa, salen);
+
+fail:
+	errno = ENOSPC;
+	return -1;
+}
+
+int
 send_get_peers(pdht D, const struct sockaddr *sa, int salen,
 unsigned char *tid, int tid_len, unsigned char *infohash,
 int want, int confirm)
@@ -2502,8 +2562,7 @@ const struct sockaddr *from, int fromlen
 			debugf(D, "Pong!\n");
 			new_node(D, id, from, fromlen, 2);
 		}
-		else if (tid_match(tid, "fn", NULL) ||
-			tid_match(tid, "gp", NULL)) {
+		else if (tid_match(tid, "gp", NULL)) {
 			int gp = 0;
 			struct search *sr = NULL;
 			if (tid_match(tid, "gp", &ttid)) {
@@ -2567,7 +2626,7 @@ const struct sockaddr *from, int fromlen
 					/* Since we received a reply, the number of
 					requests in flight has decreased.  Let's push
 					another request. */
-					search_send_get_peers(D, sr, NULL);
+					search_send(D, sr, NULL);
 			}
 			if (sr) {
 				unsigned char* token;
@@ -2591,6 +2650,120 @@ const struct sockaddr *from, int fromlen
 				}
 			}
 		}
+		else if (tid_match(tid, "sr", NULL)) {
+			int sh = 0;
+			struct search *sr = NULL;
+			if (tid_match(tid, "sr", &ttid)) {
+				sh = 1;
+				sr = find_search(D, ttid, from->sa_family);
+			}
+
+			unsigned char *nodes, *nodes6;
+			int nodes_len, nodes6_len;
+			b_find(r, "nodes", &nodes, nodes_len);
+			b_find(r, "nodes6", &nodes6, nodes6_len);
+
+			debugf(D, "Nodes found (%d+%d)%s!\n", nodes_len / 26, nodes6_len / 38,
+				sh ? " for search" : "");
+			if (nodes_len % 26 != 0 || nodes6_len % 38 != 0) {
+				debugf(D, "Unexpected length for node info!\n");
+				blacklist_node(D, id, from, fromlen);
+			}
+			else if (sh && sr == NULL) {
+				debugf(D, "Unknown search!\n");
+				new_node(D, id, from, fromlen, 1);
+			}
+			else {
+				int i;
+				new_node(D, id, from, fromlen, 2);
+				for (i = 0; i < nodes_len / 26; i++) {
+					unsigned char *ni = nodes + i * 26;
+					struct sockaddr_in sin;
+					if (id_cmp(ni, D->myid) == 0)
+						continue;
+					memset(&sin, 0, sizeof(sin));
+					sin.sin_family = AF_INET;
+					memcpy(&sin.sin_addr, ni + 20, 4);
+					memcpy(&sin.sin_port, ni + 24, 2);
+					new_node(D, ni, (struct sockaddr*)&sin, sizeof(sin), 0);
+					if (sr && sr->af == AF_INET) {
+						insert_search_node(D, ni,
+							(struct sockaddr*)&sin,
+							sizeof(sin),
+							sr, 0, NULL, 0);
+					}
+				}
+				for (i = 0; i < nodes6_len / 38; i++) {
+					unsigned char *ni = nodes6 + i * 38;
+					struct sockaddr_in6 sin6;
+					if (id_cmp(ni, D->myid) == 0)
+						continue;
+					memset(&sin6, 0, sizeof(sin6));
+					sin6.sin6_family = AF_INET6;
+					memcpy(&sin6.sin6_addr, ni + 20, 16);
+					memcpy(&sin6.sin6_port, ni + 36, 2);
+					new_node(D, ni, (struct sockaddr*)&sin6, sizeof(sin6), 0);
+					if (sr && sr->af == AF_INET6) {
+						insert_search_node(D, ni,
+							(struct sockaddr*)&sin6,
+							sizeof(sin6),
+							sr, 0, NULL, 0);
+					}
+				}
+				if (sr)
+					/* Since we received a reply, the number of
+					requests in flight has decreased.  Let's push
+					another request. */
+					search_send(D, sr, NULL);
+			}
+			if (sr) {
+				unsigned char* token;
+				int token_len;
+				b_find(r, "token", &token, token_len);
+				if (token_len == 0)
+					goto dontread;
+
+				insert_search_node(D, id, from, fromlen, sr,
+					1, token, token_len);
+			}
+		}
+		else if (tid_match(tid, "fn", NULL)) {
+			unsigned char *nodes, *nodes6;
+			int nodes_len, nodes6_len;
+			b_find(r, "nodes", &nodes, nodes_len);
+			b_find(r, "nodes6", &nodes6, nodes6_len);
+
+			if (nodes_len % 26 != 0 || nodes6_len % 38 != 0) {
+				debugf(D, "Unexpected length for node info!\n");
+				blacklist_node(D, id, from, fromlen);
+			}
+			else {
+				int i;
+				new_node(D, id, from, fromlen, 2);
+				for (i = 0; i < nodes_len / 26; i++) {
+					unsigned char *ni = nodes + i * 26;
+					struct sockaddr_in sin;
+					if (id_cmp(ni, D->myid) == 0)
+						continue;
+					memset(&sin, 0, sizeof(sin));
+					sin.sin_family = AF_INET;
+					memcpy(&sin.sin_addr, ni + 20, 4);
+					memcpy(&sin.sin_port, ni + 24, 2);
+					new_node(D, ni, (struct sockaddr*)&sin, sizeof(sin), 0);
+				}
+				for (i = 0; i < nodes6_len / 38; i++) {
+					unsigned char *ni = nodes6 + i * 38;
+					struct sockaddr_in6 sin6;
+					if (id_cmp(ni, D->myid) == 0)
+						continue;
+					memset(&sin6, 0, sizeof(sin6));
+					sin6.sin6_family = AF_INET6;
+					memcpy(&sin6.sin6_addr, ni + 20, 16);
+					memcpy(&sin6.sin6_port, ni + 36, 2);
+					new_node(D, ni, (struct sockaddr*)&sin6, sizeof(sin6), 0);
+				}
+			}
+		}
 		else if (tid_match(tid, "ap", &ttid)) {
 			struct search *sr;
 			debugf(D, "Got reply to announce_peer.\n");
@@ -2611,7 +2784,7 @@ const struct sockaddr *from, int fromlen
 						break;
 					}
 				/* See comment for gp above. */
-				search_send_get_peers(D, sr, NULL);
+				search_send(D, sr, NULL);
 			}
 		}
 		else {
@@ -2726,6 +2899,51 @@ const struct sockaddr *from, int fromlen
 						tid, tid_len, info_hash, want,
 						0, NULL, token, TOKEN_SIZE);
 				}
+			}
+		}
+		else if (memcmp(q_return, "search", q_len) == 0)
+		{
+			unsigned char *info_hash;
+			int info_hash_len;
+			b_find(a, "info_hash", &info_hash, info_hash_len);
+			if (info_hash_len == 0)
+				goto dontread;
+
+			int want = -1;
+			b_element *e_want, *l_want;
+			b_find(a, "want", &e_want);
+			if (e_want != 0){
+				b_get(e_want, 0, &l_want);
+				if (l_want != 0){
+					while (true){
+						if (memcmp(&l_want->buf[0], "n4", 2) == 0)
+							want |= WANT4;
+						else if (memcmp(&l_want->buf[0], "n6", 2) == 0)
+							want |= WANT6;
+						b_next(e_want, &l_want);
+						if (l_want == 0)
+							break;
+					}
+				}
+			}
+
+			debugf(D, "search!\n");
+			debugf_hex(D, "tid:", tid, tid_len);
+			new_node(D, id, from, fromlen, 1);
+			if (id_cmp(info_hash, zeroes) == 0) {
+				debugf(D, "Eek!  Got get_peers with no info_hash.\n");
+				send_error(D, from, fromlen, tid, tid_len,
+					203, "search with no info_hash");
+				return;
+			}
+			else {
+				unsigned char token[TOKEN_SIZE];
+				make_token(D, from, 0, token);
+
+				debugf(D, "Sending nodes for search.\n");
+				send_closest_nodes(D, from, fromlen,
+					tid, tid_len, info_hash, want,
+					0, NULL, token, TOKEN_SIZE);			
 			}
 		}
 		else if (memcmp(q_return, "announce_peer", q_len) == 0)
