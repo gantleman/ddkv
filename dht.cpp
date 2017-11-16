@@ -1,5 +1,6 @@
 /*
 Copyright (c) 2009-2011 by Juliusz Chroboczek
+Copyright (c) 2009-2011 by shuo sun(dds_sun@hotmail.com)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -235,7 +236,7 @@ struct search {
 	time_t step_time;           /* the time of the last search_step */
 	unsigned char id[20];
 	unsigned short pg;        /* 0 for pure get*/
-	std::vector<char> buf;     //要发布的数据块替代port
+	std::vector<char> buf;     //Data to be published
 	int done;
 	struct search_node nodes[SEARCH_NODES];
 	int numnodes;
@@ -246,7 +247,8 @@ struct search {
 
 struct peer {
 	time_t time;
-	std::vector<char> buf;     //发布的数据块
+	bool	isb;//Is the tag a start node?
+	std::vector<char> buf;     //data block
 };
 
 /* The maximum number of hashes we're willing to track. */
