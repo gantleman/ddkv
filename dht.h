@@ -47,7 +47,7 @@ int dht_periodic(DHT D, const void *buf, size_t buflen,
 int dht_search(DHT D, const unsigned char *id, int pg, int af,
                dht_callback *callback, void *closure, const char* buf=0, int len=0);
 int dht_nodes(DHT D, int af,
-              int *good_return, int *dubious_return, int *cached_return,
+              int *good_return, int *dubious_return,
               int *incoming_return);
 void dht_dump_tables(DHT D, FILE *f);
 int dht_get_nodes(DHT D, struct sockaddr_in *sin, int *num,
