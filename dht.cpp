@@ -192,6 +192,11 @@ struct node {
 	struct node *next;
 };
 
+struct gp_node {
+	struct sockaddr_storage ss;
+	int sslen;
+};
+
 struct bucket {
 	int af;
 	unsigned char first[20];
@@ -221,7 +226,10 @@ struct search_node {
    the target 8 turn out to be dead. */
 #define SEARCH_NODES 14
 
-///注意search用于增改与查询两种操作
+#define MAXGETPEER   3
+#define MAXANNOUNCE  5
+
+///Notice that search is used to modify and query the two operations
 struct search {
 	unsigned short tid;
 	int af;
@@ -235,12 +243,14 @@ struct search {
 	struct search *next;
 	dht_callback *callback;
 	void *closure;
-	std::map<std::vector<char>, int> result;//Return result ranking
+
+	///announce and get peer
+	std::list<gp_node> gp_node;//allready return node, announce peer user too
+	std::map<std::vector<char>, int> gp_result;//Return result ranking
 };
 
 struct peer {
 	time_t time;
-	bool	isb;//Is the tag a start node?
 	std::vector<char> buf;     //data block
 };
 
@@ -328,6 +338,10 @@ typedef struct _dht
 	int token_bucket_tokens;
 
 	FILE *dht_debug;
+
+	struct sockaddr_in sin;
+	struct sockaddr_in6 sin6;
+
 }*pdht, dht;
 
 static struct storage * find_storage(pdht D, const unsigned char *id);
@@ -1186,9 +1200,11 @@ search_step(pdht D, struct search *sr)
 
 	if (all_done) {
 		if (sr->pg == 0) {
+			///begin step get peer
 			goto done;
 		}
 		else {
+			///begin step announce peer
 			int all_acked = 1;
 			j = 0;
 			for (i = 0; i < sr->numnodes && j < 8; i++) {
@@ -1240,11 +1256,6 @@ search_step(pdht D, struct search *sr)
 
 done:
 	sr->done = 1;
-	if (sr->callback)
-		(*sr->callback)((DHT)D, sr->closure,
-		sr->af == AF_INET ?
-	DHT_EVENT_SEARCH_DONE : DHT_EVENT_SEARCH_DONE6,
-							sr->id, NULL, 0);
 	sr->step_time = D->now.tv_sec;
 }
 
@@ -1643,7 +1654,9 @@ dht_dump_tables(DHT iD, FILE *f)
 }
 
 int
-dht_init(DHT* OutD, int s, int s6, const unsigned char *id, const unsigned char *v, FILE* df)
+dht_init(DHT* OutD, int s, int s6, const unsigned char *id, 
+		const unsigned char *v, FILE* df,
+		struct sockaddr_in &sin,struct sockaddr_in6 &sin6)
 {
 	int rc;
 	pdht D = (pdht)calloc(sizeof(dht), 1);
@@ -1713,8 +1726,10 @@ dht_init(DHT* OutD, int s, int s6, const unsigned char *id, const unsigned char 
 	expire_buckets(D, D->buckets);
 	expire_buckets(D, D->buckets6);
 
-	return 1;
+	memcpy(&D->sin, &sin, sizeof(sockaddr_in));
+	memcpy(&D->sin6, &sin6, sizeof(sockaddr_in6));
 
+	return 1;
 fail:
 	free(D->buckets);
 	D->buckets = NULL;
@@ -1792,7 +1807,7 @@ token_bucket(pdht D)
 	return 1;
 }
 
-///对当前k桶，下一个K桶，或则上一个k桶的临近节点搜索
+///The current K barrels, a barrel of K, or near the node of a barrel of K search
 static int
 neighbourhood_maintenance(pdht D, int af)
 {

@@ -35,7 +35,10 @@ dht_callback(DHT D,
 #define DHT_EVENT_SEARCH_DONE 3
 #define DHT_EVENT_SEARCH_DONE6 4
 
-int dht_init(DHT* D, int s, int s6, const unsigned char *id, const unsigned char *v, FILE* df);
+int dht_init(DHT* D, int s, int s6, const unsigned char *id,
+			const unsigned char *v, FILE* df,
+			struct sockaddr_in &sin,
+			struct sockaddr_in6 &sin6);
 int dht_insert_node(DHT D, const unsigned char *id, struct sockaddr *sa, int salen);
 int dht_ping_node(DHT D, const struct sockaddr *sa, int salen);
 int dht_periodic(DHT D, const void *buf, size_t buflen,
