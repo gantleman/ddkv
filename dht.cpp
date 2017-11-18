@@ -239,6 +239,7 @@ struct search {
 };
 
 struct peer {
+	unsigned short head;///0 normal, 1 is head
 	time_t time;
 	std::vector<char> buf;     //data block
 };
@@ -656,8 +657,7 @@ int confirm)
 	memcpy(&k[0], id, IDLEN);
 
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->find(k);
-	if (iter != r->end())
-	{
+	if (iter != r->end()){
 		struct node *n = &iter->second;
 		if (confirm || n->time < D->now.tv_sec - 15 * 60) {
 			/* Known node.  Update stuff. */
@@ -670,26 +670,23 @@ int confirm)
 				n->pinged_time = 0;
 			}
 		}
+	}else{
+		//new node
+		struct node* n = &(*r)[k];
+
+		if (sa->sa_family == AF_INET)
+			D->mybucket_grow_time = D->now.tv_sec;
 		else
-		{
-			//new node
-			struct node* n = &(*r)[k];
+			D->mybucket6_grow_time = D->now.tv_sec;
 
-			if (sa->sa_family == AF_INET)
-				D->mybucket_grow_time = D->now.tv_sec;
-			else
-				D->mybucket6_grow_time = D->now.tv_sec;
-
-			/* Create a new node. */
-			memcpy(n->id, id, IDLEN);
-			memcpy(&n->ss, sa, salen);
-			n->sslen = salen;
-			n->time = confirm ? D->now.tv_sec : 0;
-			n->reply_time = confirm >= 2 ? D->now.tv_sec : 0;
-		}
+		/* Create a new node. */
+		memcpy(n->id, id, IDLEN);
+		memcpy(&n->ss, sa, salen);
+		n->sslen = salen;
+		n->time = confirm ? D->now.tv_sec : 0;
+		n->reply_time = confirm >= 2 ? D->now.tv_sec : 0;
 		return n;
 	}
-
 	return 0;
 }
 
@@ -701,13 +698,10 @@ expire_buckets(pdht D, std::map<std::vector<unsigned char>, node> *routetable)
 {
 
 	std::map<std::vector<unsigned char>, node>::iterator iter = routetable->begin();
-	for (; iter != routetable->end(); )
-	{
-		if (iter->second.pinged >= 4)
-		{
+	for (; iter != routetable->end(); ){
+		if (iter->second.pinged >= 4){
 			iter = routetable->erase(iter);
-		}
-		else
+		}else
 			iter++;
 	}
 	D->expire_stuff_time = D->now.tv_sec + 120 + random() % 240;
@@ -1211,7 +1205,6 @@ dht_nodes(DHT iD, int af, int *good_return, int *dubious_return,
 int *incoming_return)
 {
 	pdht D = (pdht)iD;
-
 	int good = 0, dubious = 0, incoming = 0;
 	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->begin();
@@ -1347,7 +1340,7 @@ dht_init(DHT* OutD, int s, int s6, const unsigned char *id,
 		struct sockaddr_in &sin,struct sockaddr_in6 &sin6)
 {
 	int rc;
-	pdht D = (pdht)calloc(sizeof(dht), 1);
+	pdht D = new dht;
 	*OutD = D;
 	D->dht_debug = df;
 
@@ -1437,7 +1430,7 @@ dht_uninit(DHT iD)
 		free(sr);
 	}
 
-	free(D);
+	delete D;
 	return 1;
 }
 
@@ -1465,6 +1458,9 @@ static int
 neighbourhood_maintenance(pdht D, int af)
 {
 	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
+	if (0 == r->size())
+		return 0;
+
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->begin();
 	int ir = random() % r->size();
 
@@ -1489,6 +1485,9 @@ static int
 bucket_maintenance(pdht D, int af)
 {
 	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
+	if (0 == r->size())
+		return 0;
+
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->begin();
 	int ir = random() % r->size();
 
