@@ -360,10 +360,12 @@ static int send_closest_nodes(pdht D, const struct sockaddr *sa, int salen,
 static int send_search(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
 	unsigned char *infohash, int want, int confirm);
-static int send_get_peers(pdht D, const struct sockaddr *sa, int salen,
+static int send_get_peers(pdht D, const struct sockaddr *hsa, int hsalen,
+	const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
-	unsigned char *infohash, int want, int confirm);
-static int send_announce_peer(pdht D, const struct sockaddr *sa, int salen,
+	unsigned char *infohash, int want, int confirm, int sequence);
+static int send_announce_peer(pdht D, const struct sockaddr *hsa, int hsalen, 
+	const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
 	unsigned char *info_hash, int info_hash_len,
 	unsigned char *value, int value_len,
@@ -880,8 +882,10 @@ get_peers_send(pdht D, struct search *sr, struct search_node *n)
 	debugf(D, "Sending get_peers.\n");
 	make_tid(tid, "gp", sr->tid);
 	debugf_hex(D, "tid:", tid, 4);
-	send_get_peers(D, (struct sockaddr*)&n->ss, n->sslen, tid, 4, sr->id, -1,
-		n->reply_time >= D->now.tv_sec - 15);
+	send_get_peers(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&D->sin : (struct sockaddr*) &D->sin6,
+		n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
+		(struct sockaddr*)&n->ss, n->sslen, tid, 4, sr->id, -1,
+		n->reply_time >= D->now.tv_sec - 15, 0);
 	n->pinged++;
 	n->request_time = D->now.tv_sec;
 	/* If the node happens to be in our main routing table, mark it
@@ -915,9 +919,41 @@ search_step(pdht D, struct search *sr)
 	if (all_done) {
 		if (sr->pg == 0) {
 			///begin step get peer
-			goto done;
-		}
-		else {
+			if (!sr->getpeer){
+				sr->getpeer = 1;
+				int sendap = 0;
+				for (i = 0; i < sr->numnodes; i++) {
+					struct search_node *n = &sr->nodes[i];
+					struct node *node;
+					unsigned char tid[4];
+					if (n->pinged >= 3)
+						continue;
+					/* A proposed extension to the protocol consists in
+					omitting the token when storage tables are full.  While
+					I don't think this makes a lot of sense -- just sending
+					a positive reply is just as good --, let's deal with it. */
+					sendap = 1;
+					debugf(D, "Sending announce_peer.\n");
+					make_tid(tid, "gp", sr->tid);
+					search_send(D, sr, &sr->nodes[i]);
+					n->pinged++;
+					n->request_time = D->now.tv_sec;
+					node = find_node(D, n->id, n->ss.ss_family);
+					if (node) pinged(D, node);
+					break;
+				}
+				if (!sendap){
+					debugf(D, "Sending announce_peer error.\n");
+				}
+			}
+			else if (sr->gpnode.size() < MAXGETPEER && D->now.tv_sec - sr->step_time > 60){
+				///outtime try again
+			}
+			else if (sr->gpnode.size() >= MAXGETPEER){
+				goto done;
+			}
+
+		}else {
 			///begin step announce peer
 			if (!sr->getpeer){
 				sr->getpeer = 1;
@@ -935,7 +971,9 @@ search_step(pdht D, struct search *sr)
 					sendap = 1;
 					debugf(D, "Sending announce_peer.\n");
 					make_tid(tid, "ap", sr->tid);
-					send_announce_peer(D, (struct sockaddr*)&n->ss,
+					send_announce_peer(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&D->sin : (struct sockaddr*)&D->sin6,
+						n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
+						(struct sockaddr*)&n->ss,
 						sizeof(struct sockaddr_storage),
 						tid, 4, sr->id, IDLEN,
 						(unsigned char*)&sr->buf[0], sr->buf.size(),
@@ -950,10 +988,11 @@ search_step(pdht D, struct search *sr)
 				if (!sendap){
 					debugf(D, "Sending announce_peer error.\n");
 				}
-			}else if (sr->gpnode.size() < 5 && D->now.tv_sec - sr->step_time > 60){
+			}
+			else if (sr->gpnode.size() < MAXANNOUNCE && D->now.tv_sec - sr->step_time > 60){
 				///outtime try again
 			}
-			else if (sr->gpnode.size() >= 5 ){
+			else if (sr->gpnode.size() >= MAXANNOUNCE){
 				goto done;
 			}
 		}
@@ -2008,9 +2047,10 @@ fail:
 }
 
 int
-send_get_peers(pdht D, const struct sockaddr *sa, int salen,
+send_get_peers(pdht D, const struct sockaddr *hsa, int hsalen,
+const struct sockaddr *sa, int salen,
 unsigned char *tid, int tid_len, unsigned char *infohash,
-int want, int confirm)
+int want, int confirm, int sequence)
 {
 	char buf[512];
 	int i = 0, rc;
@@ -2025,6 +2065,20 @@ int want, int confirm)
 			(want & WANT6) ? "2:n6" : "");
 		INC(i, rc, 512);
 	}
+	if (hsa->sa_family == AF_INET){
+		sockaddr_in* sd_in = (sockaddr_in*)hsa;
+		rc = snprintf(buf + i, 512 - i, "5:order%d:", 6); INC(i, rc, 512);
+		COPY(buf, i, &sd_in->sin_addr, 4, 512);
+		COPY(buf, i, &sd_in->sin_port, 2, 512);
+	}
+	else{
+		sockaddr_in6* sd_in = (sockaddr_in6*)hsa;
+		rc = snprintf(buf + i, 512 - i, "5:order%d:", 18); INC(i, rc, 512);
+		COPY(buf, i, &sd_in->sin6_addr, 16, 512);
+		COPY(buf, i, &sd_in->sin6_port, 2, 512);
+	}
+	rc = snprintf(buf + i, 512 - i, "8:sequence%d:", sizeof(int)); INC(i, rc, 512);
+	COPY(buf, i, &sequence, sizeof(int), 512);
 	rc = snprintf(buf + i, 512 - i, "e1:q9:get_peers1:t%d:", tid_len);
 	INC(i, rc, 512);
 	COPY(buf, i, tid, tid_len, 512);
@@ -2038,7 +2092,7 @@ fail:
 }
 
 static int
-send_announce_peer(pdht D, const struct sockaddr *sa, int salen,
+send_announce_peer(pdht D, const struct sockaddr* hsa, int hsalen, const struct sockaddr *sa, int salen,
 unsigned char *tid, int tid_len,
 unsigned char *info_hash, int info_hash_len,
 unsigned char *value, int value_len,
@@ -2056,17 +2110,20 @@ unsigned char *token, int token_len, int confirm, int sequence)
 	rc = snprintf(buf + i, 512 - i, "5:token%d:", token_len);
 	INC(i, rc, 512);
 	COPY(buf, i, token, token_len, 512);
-	if (sa->sa_family == AF_INET){
+	if (hsa->sa_family == AF_INET){
+		sockaddr_in* sd_in = (sockaddr_in*)hsa;
 		rc = snprintf(buf + i, 512 - i, "5:order%d:", 6);INC(i, rc, 512);
-		COPY(buf, i, &D->sin.sin_addr, 4, 512);
-		COPY(buf, i, &D->sin.sin_port, 2, 512);
+		COPY(buf, i, &sd_in->sin_addr, 4, 512);
+		COPY(buf, i, &sd_in->sin_port, 2, 512);
 	}else{
+		sockaddr_in6* sd_in = (sockaddr_in6*)hsa;
 		rc = snprintf(buf + i, 512 - i, "5:order%d:", 18); INC(i, rc, 512);
-		COPY(buf, i, &D->sin6.sin6_addr, 16, 512);
-		COPY(buf, i, &D->sin6.sin6_port, 2, 512);
+		COPY(buf, i, &sd_in->sin6_addr, 16, 512);
+		COPY(buf, i, &sd_in->sin6_port, 2, 512);
 	}
 	rc = snprintf(buf + i, 512 - i, "8:sequence%d:", sizeof(int)); INC(i, rc, 512);
 	COPY(buf, i, &sequence, sizeof(int), 512);
+
 	rc = snprintf(buf + i, 512 - i, "e1:q13:announce_peer1:t%d:", tid_len);
 	INC(i, rc, 512);
 	COPY(buf, i, tid, tid_len, 512);
@@ -2485,6 +2542,22 @@ const struct sockaddr *from, int fromlen
 				}
 			}
 
+			unsigned char* order;
+			int order_len;
+			b_find(a, "order", &order, order_len);
+			if (order_len == 0)
+				goto dontread;
+
+			unsigned char* sequence;
+			int sequence_len;
+			b_find(a, "sequence", &sequence, sequence_len);
+			if (sequence_len == 0)
+				goto dontread;
+			int isequence = -1;
+			memcpy(&isequence, sequence, sequence_len);
+			if (isequence == -1)
+				goto dontread;
+
 			debugf(D, "Get_peers!\n");
 			debugf_hex(D, "tid:", tid, tid_len);
 			new_node(D, id, from, fromlen, 1);
@@ -2497,19 +2570,49 @@ const struct sockaddr *from, int fromlen
 				struct storage *st = find_storage(D, info_hash);
 				unsigned char token[TOKEN_SIZE];
 				make_token(D, from, 0, token);
+
+				struct sockaddr_in order_in;
+				struct sockaddr_in6 order_in6;
+				struct sockaddr* to;
+				int to_len;
+				if (order_len == 6){
+					order_in.sin_family = AF_INET;
+					memcpy((void*)&order_in.sin_addr, order, 4);
+					memcpy((void*)&order_in.sin_port, order + 4, 2);
+					to = (sockaddr*)&order_in;
+					to_len = sizeof(order_in);
+				}
+				else if (order_len == 18){
+					order_in6.sin6_family = AF_INET6;
+					memcpy((void*)&order_in6.sin6_addr, order, 16);
+					memcpy((void*)&order_in6.sin6_port, order + 16, 2);
+					to = (sockaddr*)&order_in6;
+					to_len = sizeof(order_in6);
+				}
+
 				if (st) {
 					debugf(D, "Sending found %s peers.\n",
 						from->sa_family == AF_INET6 ? " IPv6" : "");
-					send_closest_nodes(D, from, fromlen,
+					send_closest_nodes(D, to, to_len,
 						tid, tid_len,
 						info_hash, want,
 						from->sa_family, st,
 						token, TOKEN_SIZE);
 				}else {
 					debugf(D, "Sending nodes for get_peers.\n");
-					send_closest_nodes(D, from, fromlen,
+					send_closest_nodes(D, to, to_len,
 						tid, tid_len, info_hash, want,
 						0, NULL, token, TOKEN_SIZE);
+				}
+
+				node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+
+				///It is necessary to send 3 times continuously to detect the non arrival rate
+				if (++isequence <= MAXGETPEER && n){
+					send_get_peers(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&order_in : (struct sockaddr*)&order_in6,
+						n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
+						(struct sockaddr*)&n->ss, n->sslen, tid, 4, info_hash, -1,
+						n->reply_time >= D->now.tv_sec - 15, isequence);
 				}
 			}
 		}
@@ -2575,7 +2678,7 @@ const struct sockaddr *from, int fromlen
 			unsigned char* order;
 			int order_len;
 			b_find(a, "order", &order, order_len);
-			if (token_len == 0)
+			if (order_len == 0)
 				goto dontread;
 
 			unsigned char* sequence;
@@ -2643,13 +2746,16 @@ const struct sockaddr *from, int fromlen
 			///选择一个最近的临近节点将消息转发给他
 			node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 
+			///It is necessary to send 3 times continuously to detect the non arrival rate
 			if (++isequence <= MAXANNOUNCE && n){
-				send_announce_peer(D, (struct sockaddr*)&n->ss,
+				send_announce_peer(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&order_in : (struct sockaddr*)&order_in6,
+					n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
+					(struct sockaddr*)&n->ss,
 					sizeof(struct sockaddr_storage),
 					tid, 4, info_hash, IDLEN,
 					(unsigned char*)value, value_len,
 					token, token_len,
-					n->reply_time >= D->now.tv_sec - 15, 0);
+					n->reply_time >= D->now.tv_sec - 15, isequence);
 			}
 		}
 
