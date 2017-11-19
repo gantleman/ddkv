@@ -207,7 +207,6 @@ struct search_node {
 	unsigned char token[40];
 	int token_len;
 	int replied;                /* whether we have received a reply */
-	int acked;                  /* whether they acked our announcement */
 };
 
 /* When performing a search, we search for up to SEARCH_NODES closest nodes
@@ -233,9 +232,11 @@ struct search {
 	dht_callback *callback;
 	void *closure;
 
+	int sequence;
 	///announce and get peer
-	std::list<gp_node> gp_node;//allready return node, announce peer user too
-	std::map<std::vector<char>, int> gp_result;//Return result ranking
+	int getpeer;
+	std::list<gp_node> gpnode;//allready return node, announce peer user too
+	std::map<std::vector<char>, int> gpresult;//Return result ranking
 };
 
 struct peer {
@@ -364,8 +365,9 @@ static int send_get_peers(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *infohash, int want, int confirm);
 static int send_announce_peer(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
-	struct search *sr,
-	unsigned char *token, int token_len, int confirm);
+	unsigned char *info_hash, int info_hash_len,
+	unsigned char *value, int value_len,
+	unsigned char *token, int token_len, int confirm, int sequence);
 static int send_peer_announced(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len);
 static int send_error(pdht D, const struct sockaddr *sa, int salen,
@@ -917,38 +919,43 @@ search_step(pdht D, struct search *sr)
 		}
 		else {
 			///begin step announce peer
-			int all_acked = 1;
-			j = 0;
-			for (i = 0; i < sr->numnodes && j < 8; i++) {
-				struct search_node *n = &sr->nodes[i];
-				struct node *node;
-				unsigned char tid[4];
-				if (n->pinged >= 3)
-					continue;
-				/* A proposed extension to the protocol consists in
-				   omitting the token when storage tables are full.  While
-				   I don't think this makes a lot of sense -- just sending
-				   a positive reply is just as good --, let's deal with it. */
-				if (n->token_len == 0)
-					n->acked = 1;
-				if (!n->acked) {
-					all_acked = 0;
+			if (!sr->getpeer){
+				sr->getpeer = 1;
+				int sendap = 0;
+				for (i = 0; i < sr->numnodes; i++) {
+					struct search_node *n = &sr->nodes[i];
+					struct node *node;
+					unsigned char tid[4];
+					if (n->pinged >= 3)
+						continue;
+					/* A proposed extension to the protocol consists in
+					   omitting the token when storage tables are full.  While
+					   I don't think this makes a lot of sense -- just sending
+					   a positive reply is just as good --, let's deal with it. */
+					sendap = 1;
 					debugf(D, "Sending announce_peer.\n");
 					make_tid(tid, "ap", sr->tid);
 					send_announce_peer(D, (struct sockaddr*)&n->ss,
 						sizeof(struct sockaddr_storage),
-						tid, 4, sr,
+						tid, 4, sr->id, IDLEN,
+						(unsigned char*)&sr->buf[0], sr->buf.size(),
 						n->token, n->token_len,
-						n->reply_time >= D->now.tv_sec - 15);
+						n->reply_time >= D->now.tv_sec - 15, 0);
 					n->pinged++;
 					n->request_time = D->now.tv_sec;
 					node = find_node(D, n->id, n->ss.ss_family);
 					if (node) pinged(D, node);
+					break;
 				}
-				j++;
+				if (!sendap){
+					debugf(D, "Sending announce_peer error.\n");
+				}
+			}else if (sr->gpnode.size() < 5 && D->now.tv_sec - sr->step_time > 60){
+				///outtime try again
 			}
-			if (all_acked)
+			else if (sr->gpnode.size() >= 5 ){
 				goto done;
+			}
 		}
 		sr->step_time = D->now.tv_sec;
 		return;
@@ -1055,6 +1062,8 @@ dht_callback *callback, void *closure, const char* buf, int len)
 	sr->pg = pg;
 	sr->callback = callback;
 	sr->closure = closure;
+	sr->sequence = 0;
+	sr->getpeer = 0;
 	if (pg && len){
 		sr->buf.resize(len);
 		memcpy(&sr->buf[0], buf, len);
@@ -1755,35 +1764,6 @@ fail:
 }
 
 int
-send_find_node(pdht D, const struct sockaddr *sa, int salen,
-const unsigned char *tid, int tid_len,
-const unsigned char *target, int want, int confirm)
-{
-	char buf[512];
-	int i = 0, rc;
-	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
-	COPY(buf, i, D->myid, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "6:target20:"); INC(i, rc, 512);
-	COPY(buf, i, target, IDLEN, 512);
-	if (want > 0) {
-		rc = snprintf(buf + i, 512 - i, "4:wantl%s%se",
-			(want & WANT4) ? "2:n4" : "",
-			(want & WANT6) ? "2:n6" : "");
-		INC(i, rc, 512);
-	}
-	rc = snprintf(buf + i, 512 - i, "e1:q9:find_node1:t%d:", tid_len);
-	INC(i, rc, 512);
-	COPY(buf, i, tid, tid_len, 512);
-	ADD_V(buf, i, 512);
-	rc = snprintf(buf + i, 512 - i, "1:y1:qe"); INC(i, rc, 512);
-	return dht_send(D, buf, i, confirm ? MSG_CONFIRM : 0, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
-}
-
-int
 send_nodes_peers(pdht D, const struct sockaddr *sa, int salen,
 const unsigned char *tid, int tid_len,
 const unsigned char *nodes, int nodes_len,
@@ -1825,6 +1805,35 @@ const unsigned char *token, int token_len)
 	ADD_V(buf, i, 2048);
 	rc = snprintf(buf + i, 2048 - i, "1:y1:re"); INC(i, rc, 2048);
 	return dht_send(D, buf, i, 0, sa, salen);
+
+fail:
+	errno = ENOSPC;
+	return -1;
+}
+
+int
+send_find_node(pdht D, const struct sockaddr *sa, int salen,
+const unsigned char *tid, int tid_len,
+const unsigned char *target, int want, int confirm)
+{
+	char buf[512];
+	int i = 0, rc;
+	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
+	COPY(buf, i, D->myid, IDLEN, 512);
+	rc = snprintf(buf + i, 512 - i, "6:target20:"); INC(i, rc, 512);
+	COPY(buf, i, target, IDLEN, 512);
+	if (want > 0) {
+		rc = snprintf(buf + i, 512 - i, "4:wantl%s%se",
+			(want & WANT4) ? "2:n4" : "",
+			(want & WANT6) ? "2:n6" : "");
+		INC(i, rc, 512);
+	}
+	rc = snprintf(buf + i, 512 - i, "e1:q9:find_node1:t%d:", tid_len);
+	INC(i, rc, 512);
+	COPY(buf, i, tid, tid_len, 512);
+	ADD_V(buf, i, 512);
+	rc = snprintf(buf + i, 512 - i, "1:y1:qe"); INC(i, rc, 512);
+	return dht_send(D, buf, i, confirm ? MSG_CONFIRM : 0, sa, salen);
 
 fail:
 	errno = ENOSPC;
@@ -1910,6 +1919,34 @@ const unsigned char *id, std::map<std::vector<unsigned char>, node> *r)
 			
 	}
 	return numnodes;
+}
+
+static node* neighbourhoodup(pdht D, const unsigned char *id,
+	std::map<std::vector<unsigned char>, node> *r)
+{
+	if (r->empty())
+		return 0;
+	
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+	std::map<std::vector<unsigned char>, node>::iterator iter, iter2 = r->lower_bound(k);
+	iter = iter2;
+	iter--;
+	for (int i = 0; i < int(r->size()*2); i++){
+		if (iter == r->end()){
+			iter--;
+			continue;
+		}
+		if (iter == iter2){
+			return 0;
+		}
+		struct node *n = &iter->second;
+		if (node_good(D, n)){
+			return n;
+		}
+	}
+	return 0;
 }
 
 int
@@ -2000,11 +2037,12 @@ fail:
 	return -1;
 }
 
-int
+static int
 send_announce_peer(pdht D, const struct sockaddr *sa, int salen,
 unsigned char *tid, int tid_len,
-struct search *sr,
-unsigned char *token, int token_len, int confirm)
+unsigned char *info_hash, int info_hash_len,
+unsigned char *value, int value_len,
+unsigned char *token, int token_len, int confirm, int sequence)
 {
 	char buf[512];
 	int i = 0, rc;
@@ -2012,12 +2050,23 @@ unsigned char *token, int token_len, int confirm)
 	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
 	COPY(buf, i, D->myid, IDLEN, 512);
 	rc = snprintf(buf + i, 512 - i, "9:info_hash20:"); INC(i, rc, 512);
-	COPY(buf, i, sr->id, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "5:value%d:", sr->buf.size()); INC(i, rc, 512);
-	COPY(buf, i, &sr->buf[0], sr->buf.size(), 512);
+	COPY(buf, i, info_hash, IDLEN, 512);
+	rc = snprintf(buf + i, 512 - i, "5:value%d:", value_len); INC(i, rc, 512);
+	COPY(buf, i, value, value_len, 512);
 	rc = snprintf(buf + i, 512 - i, "5:token%d:", token_len);
 	INC(i, rc, 512);
 	COPY(buf, i, token, token_len, 512);
+	if (sa->sa_family == AF_INET){
+		rc = snprintf(buf + i, 512 - i, "5:order%d:", 6);INC(i, rc, 512);
+		COPY(buf, i, &D->sin.sin_addr, 4, 512);
+		COPY(buf, i, &D->sin.sin_port, 2, 512);
+	}else{
+		rc = snprintf(buf + i, 512 - i, "5:order%d:", 18); INC(i, rc, 512);
+		COPY(buf, i, &D->sin6.sin6_addr, 16, 512);
+		COPY(buf, i, &D->sin6.sin6_port, 2, 512);
+	}
+	rc = snprintf(buf + i, 512 - i, "8:sequence%d:", sizeof(int)); INC(i, rc, 512);
+	COPY(buf, i, &sequence, sizeof(int), 512);
 	rc = snprintf(buf + i, 512 - i, "e1:q13:announce_peer1:t%d:", tid_len);
 	INC(i, rc, 512);
 	COPY(buf, i, tid, tid_len, 512);
@@ -2338,12 +2387,16 @@ const struct sockaddr *from, int fromlen
 					if (id_cmp(sr->nodes[i].id, id) == 0) {
 						sr->nodes[i].request_time = 0;
 						sr->nodes[i].reply_time = D->now.tv_sec;
-						sr->nodes[i].acked = 1;
 						sr->nodes[i].pinged = 0;
 						break;
 					}
+
+				gp_node n;
+				memcpy(&n.ss, &from, fromlen);
+				n.sslen = fromlen;
+				sr->gpnode.push_back(n);
 				/* See comment for gp above. */
-				search_send(D, sr, NULL);
+				//search_send(D, sr, NULL);
 			}
 		}
 		else {
@@ -2519,6 +2572,22 @@ const struct sockaddr *from, int fromlen
 			if (token_len == 0)
 				goto dontread;
 
+			unsigned char* order;
+			int order_len;
+			b_find(a, "order", &order, order_len);
+			if (token_len == 0)
+				goto dontread;
+
+			unsigned char* sequence;
+			int sequence_len;
+			b_find(a, "sequence", &sequence, sequence_len);
+			if (sequence_len == 0)
+				goto dontread;
+			int isequence = -1;
+			memcpy(&isequence, sequence, sequence_len);
+			if (isequence == -1)
+				goto dontread;
+
 			unsigned char* value;
 			int value_len;
 			b_find(a, "value", &value, value_len);
@@ -2549,8 +2618,39 @@ const struct sockaddr *from, int fromlen
 			/* Note that if storage_store failed, we lie to the requestor.
 			This is to prevent them from backtracking, and hence
 			polluting the DHT. */
+
+			struct sockaddr_in order_in;
+			struct sockaddr_in6 order_in6;
+			struct sockaddr* to;
+			int to_len;
+			if (order_len == 6){
+				order_in.sin_family = AF_INET;
+				memcpy((void*)&order_in.sin_addr, order, 4);
+				memcpy((void*)&order_in.sin_port, order+4, 2);
+				to = (sockaddr*)&order_in;
+				to_len = sizeof(order_in);
+			}else if (order_len == 18){
+				order_in6.sin6_family = AF_INET6;
+				memcpy((void*)&order_in6.sin6_addr, order, 16);
+				memcpy((void*)&order_in6.sin6_port, order + 16, 2);
+				to = (sockaddr*)&order_in6;
+				to_len = sizeof(order_in6);
+			}
+
 			debugf(D, "Sending peer announced.\n");
-			send_peer_announced(D, from, fromlen, tid, tid_len);
+			send_peer_announced(D, to, to_len, tid, tid_len);
+
+			///选择一个最近的临近节点将消息转发给他
+			node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+
+			if (++isequence <= MAXANNOUNCE && n){
+				send_announce_peer(D, (struct sockaddr*)&n->ss,
+					sizeof(struct sockaddr_storage),
+					tid, 4, info_hash, IDLEN,
+					(unsigned char*)value, value_len,
+					token, token_len,
+					n->reply_time >= D->now.tv_sec - 15, 0);
+			}
 		}
 
 		if (!token_bucket(D)) {
