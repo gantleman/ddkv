@@ -214,7 +214,7 @@ struct search_node {
    the target 8 turn out to be dead. */
 #define SEARCH_NODES 14
 
-#define MAXGETPEER   3
+#define MAXGETPEER   1
 #define MAXANNOUNCE  5
 
 ///Notice that search is used to modify and query the two operations
@@ -2307,6 +2307,10 @@ const struct sockaddr *from, int fromlen
 				int value_len;
 				b_find(r, "value", &value, value_len);
 				if (value_len != 0){
+					gp_node n;
+					memcpy(&n.ss, &from, fromlen);
+					n.sslen = fromlen;
+					sr->gpnode.push_back(n);
 					if (sr->callback) {
 						if (value_len > 0)
 							(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
