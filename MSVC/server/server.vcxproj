@@ -85,7 +85,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\bcode.cpp" />
-    <ClCompile Include="..\..\dht-example.cpp" />
+    <ClCompile Include="..\..\net.cpp" />
     <ClCompile Include="..\..\dht.cpp" />
     <ClCompile Include="..\contrib\getopt_long.c" />
     <ClCompile Include="..\contrib\md5.c" />
