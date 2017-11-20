@@ -82,10 +82,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\cJSON.c" />
     <ClCompile Include="..\..\dht-control.c" />
     <ClCompile Include="..\contrib\getopt_long.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\cJSON.h" />
     <ClInclude Include="..\contrib\getopt.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

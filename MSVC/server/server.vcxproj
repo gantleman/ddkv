@@ -85,6 +85,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\bcode.cpp" />
+    <ClCompile Include="..\..\cJSON.c" />
     <ClCompile Include="..\..\net.cpp" />
     <ClCompile Include="..\..\dht.cpp" />
     <ClCompile Include="..\contrib\getopt_long.c" />
@@ -93,6 +94,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\bcode.h" />
+    <ClInclude Include="..\..\cJSON.h" />
     <ClInclude Include="..\..\dht.h" />
     <ClInclude Include="..\contrib\getopt.h" />
     <ClInclude Include="..\contrib\md5.h" />
