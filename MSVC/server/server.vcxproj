@@ -55,7 +55,7 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;_DEBUG;_CONSOLE;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>./;../contrib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./;../contrib;../../contrib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -73,7 +73,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;NDEBUG;_CONSOLE;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>./;../contrib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./;../contrib;../../contrib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -84,21 +84,23 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\bcode.cpp" />
-    <ClCompile Include="..\..\cJSON.c" />
+    <ClCompile Include="..\..\contrib\bcode.cpp" />
+    <ClCompile Include="..\..\contrib\cJSON.c" />
+    <ClCompile Include="..\..\contrib\md5.c" />
+    <ClCompile Include="..\..\contrib\sha1.c" />
+    <ClCompile Include="..\..\contrib\sqlite3.c" />
     <ClCompile Include="..\..\net.cpp" />
     <ClCompile Include="..\..\dht.cpp" />
     <ClCompile Include="..\contrib\getopt_long.c" />
-    <ClCompile Include="..\contrib\md5.c" />
-    <ClCompile Include="..\contrib\sha1.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\bcode.h" />
-    <ClInclude Include="..\..\cJSON.h" />
+    <ClInclude Include="..\..\contrib\bcode.h" />
+    <ClInclude Include="..\..\contrib\cJSON.h" />
+    <ClInclude Include="..\..\contrib\md5.h" />
+    <ClInclude Include="..\..\contrib\sha1.h" />
+    <ClInclude Include="..\..\contrib\sqlite3.h" />
     <ClInclude Include="..\..\dht.h" />
     <ClInclude Include="..\contrib\getopt.h" />
-    <ClInclude Include="..\contrib\md5.h" />
-    <ClInclude Include="..\contrib\sha1.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
