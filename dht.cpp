@@ -925,7 +925,6 @@ search_step(pdht D, struct search *sr)
 				for (i = 0; i < sr->numnodes; i++) {
 					struct search_node *n = &sr->nodes[i];
 					struct node *node;
-					unsigned char tid[4];
 					if (n->pinged >= 3)
 						continue;
 					/* A proposed extension to the protocol consists in
@@ -934,8 +933,7 @@ search_step(pdht D, struct search *sr)
 					a positive reply is just as good --, let's deal with it. */
 					sendap = 1;
 					debugf(D, "Sending announce_peer.\n");
-					make_tid(tid, "gp", sr->tid);
-					search_send(D, sr, &sr->nodes[i]);
+					get_peers_send(D, sr, &sr->nodes[i]);
 					n->pinged++;
 					n->request_time = D->now.tv_sec;
 					node = find_node(D, n->id, n->ss.ss_family);
@@ -2287,11 +2285,6 @@ const struct sockaddr *from, int fromlen
 							sr, 0, NULL, 0);
 					}
 				}
-				if (sr)
-					/* Since we received a reply, the number of
-					requests in flight has decreased.  Let's push
-					another request. */
-					search_send(D, sr, NULL);
 			}
 			if (sr) {
 				unsigned char* token;
@@ -2316,6 +2309,9 @@ const struct sockaddr *from, int fromlen
 							(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
 							(void*)value, value_len);
 					}
+				}else{
+					(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
+						(void*)0, 0);
 				}
 			}
 		}
@@ -2603,20 +2599,20 @@ const struct sockaddr *from, int fromlen
 						from->sa_family, st,
 						token, TOKEN_SIZE);
 				}else {
+					node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+
+					///It is necessary to send 3 times continuously to detect the non arrival rate
+					if (++isequence <= MAXGETPEER && n){
+						send_get_peers(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&order_in : (struct sockaddr*)&order_in6,
+							n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
+							(struct sockaddr*)&n->ss, n->sslen, tid, 4, info_hash, -1,
+							n->reply_time >= D->now.tv_sec - 15, isequence);
+					}else{
 					debugf(D, "Sending nodes for get_peers.\n");
 					send_closest_nodes(D, to, to_len,
 						tid, tid_len, info_hash, want,
 						0, NULL, token, TOKEN_SIZE);
-				}
-
-				node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-
-				///It is necessary to send 3 times continuously to detect the non arrival rate
-				if (++isequence <= MAXGETPEER && n){
-					send_get_peers(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&order_in : (struct sockaddr*)&order_in6,
-						n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
-						(struct sockaddr*)&n->ss, n->sslen, tid, 4, info_hash, -1,
-						n->reply_time >= D->now.tv_sec - 15, isequence);
+					}
 				}
 			}
 		}
