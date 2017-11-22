@@ -553,9 +553,7 @@ static int
 node_good(pdht D, struct node *node)
 {
 	return
-		node->pinged <= 2 &&
-		node->reply_time >= D->now.tv_sec - 7200 &&
-		node->time >= D->now.tv_sec - 900;
+		node->pinged <= 2;
 }
 
 /* Our transaction-ids are 4-bytes long, with the first two bytes identi-
@@ -934,7 +932,7 @@ search_step(pdht D, struct search *sr)
 					I don't think this makes a lot of sense -- just sending
 					a positive reply is just as good --, let's deal with it. */
 					sendap = 1;
-					debugf(D, "Sending announce_peer.\n");
+					debugf(D, "Sending get_peers.\n");
 					get_peers_send(D, sr, &sr->nodes[i]);
 					n->pinged++;
 					n->request_time = D->now.tv_sec;
@@ -943,7 +941,7 @@ search_step(pdht D, struct search *sr)
 					break;
 				}
 				if (!sendap){
-					debugf(D, "Sending announce_peer error.\n");
+					debugf(D, "Sending get_peers error.\n");
 				}
 			}
 			else if (sr->gpnode.size() < MAXGETPEER && D->now.tv_sec - sr->step_time > 60){
@@ -975,7 +973,7 @@ search_step(pdht D, struct search *sr)
 					send_announce_peer(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&D->sin : (struct sockaddr*)&D->sin6,
 						n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
 						(struct sockaddr*)&n->ss,
-						sizeof(struct sockaddr_storage),
+						n->sslen,
 						tid, 4, sr->id, IDLEN,
 						(unsigned char*)&sr->buf[0], sr->buf.size(),
 						n->token, n->token_len,
@@ -994,6 +992,7 @@ search_step(pdht D, struct search *sr)
 				///outtime try again
 			}
 			else if (sr->gpnode.size() >= MAXANNOUNCE){
+				debugf(D, "Sending search successfully.\n");
 				if (sr->callback)
 					(*sr->callback)((DHT)D, sr->closure,
 									sr->af == AF_INET ?DHT_EVENT_SEARCH_DONE : DHT_EVENT_SEARCH_DONE6,
@@ -1010,6 +1009,7 @@ search_step(pdht D, struct search *sr)
 
 	j = 0;
 	for (i = 0; i < sr->numnodes; i++) {
+		debugf(D, "Sending search.\n");
 		j += search_send(D, sr, &sr->nodes[i]);
 		if (j >= 3)
 			break;
@@ -1042,7 +1042,7 @@ new_search(pdht D)
 
 	/* Allocate a new slot. */
 	if (D->numsearches < DHT_MAX_SEARCHES) {
-		sr = (search *)calloc(1, sizeof(struct search));
+		sr = new search;
 		if (sr != NULL) {
 			sr->next = D->searches;
 			D->searches = sr;
@@ -1236,21 +1236,6 @@ make_token(pdht D, const struct sockaddr *sa, int old, unsigned char *token_retu
 	dht_hash(token_return, TOKEN_SIZE,
 		old ? D->oldsecret : D->secret, sizeof(D->secret),
 		ip, iplen, (unsigned char*)&port, 2);
-}
-static int
-token_match(pdht D, const unsigned char *token, int token_len,
-const struct sockaddr *sa)
-{
-	unsigned char t[TOKEN_SIZE];
-	if (token_len != TOKEN_SIZE)
-		return 0;
-	make_token(D, sa, 0, t);
-	if (memcmp(t, token, TOKEN_SIZE) == 0)
-		return 1;
-	make_token(D, sa, 1, t);
-	if (memcmp(t, token, TOKEN_SIZE) == 0)
-		return 1;
-	return 0;
 }
 
 int
@@ -1976,15 +1961,11 @@ static node* neighbourhoodup(pdht D, const unsigned char *id,
 	k.resize(IDLEN);
 	memcpy(&k[0], id, IDLEN);
 	std::map<std::vector<unsigned char>, node>::iterator iter, iter2 = r->lower_bound(k);
-	iter = iter2;
-	iter--;
-	for (int i = 0; i < int(r->size() * 2); i++){
+	iter = --iter2;
+	for (int i = 0; i < int(r->size() + 1); i++){
 		if (iter == r->end()){
 			iter--;
 			continue;
-		}
-		if (iter == iter2){
-			return 0;
 		}
 		struct node *n = &iter->second;
 		if (node_good(D, n)){
@@ -2444,7 +2425,7 @@ const struct sockaddr *from, int fromlen
 			debugf(D, "Got reply to announce_peer.\n");
 			sr = find_search(D, ttid, from->sa_family);
 			if (!sr) {
-				debugf(D, "Unknown search!\n");
+				debugf(D, "error Unknown search!\n");
 				new_node(D, id, from, fromlen, 1);
 			}
 			else {
@@ -2459,11 +2440,9 @@ const struct sockaddr *from, int fromlen
 					}
 
 				gp_node n;
-				memcpy(&n.ss, &from, fromlen);
+				memcpy(&n.ss, from, fromlen);
 				n.sslen = fromlen;
 				sr->gpnode.push_back(n);
-				/* See comment for gp above. */
-				//search_send(D, sr, NULL);
 			}
 		}
 		else {
@@ -2615,6 +2594,7 @@ const struct sockaddr *from, int fromlen
 
 					///It is necessary to send 3 times continuously to detect the non arrival rate
 					if (++isequence <= MAXGETPEER && n){
+						debugf(D, "Sendin get_peers to next neighbourhood.\n");
 						send_get_peers(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&order_in : (struct sockaddr*)&order_in6,
 							n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
 							(struct sockaddr*)&n->ss, n->sslen, tid, 4, info_hash, -1,
@@ -2713,19 +2693,13 @@ const struct sockaddr *from, int fromlen
 			debugf(D, "Announce peer!\n");
 			new_node(D, id, from, fromlen, 1);
 			if (id_cmp(info_hash, zeroes) == 0) {
-				debugf(D, "Announce_peer with no info_hash.\n");
+				debugf(D, "error Announce_peer with no info_hash.\n");
 				send_error(D, from, fromlen, tid, tid_len,
 					203, "Announce_peer with no info_hash");
 				return;
 			}
-			if (!token_match(D, token, token_len, from)) {
-				debugf(D, "Incorrect token for announce_peer.\n");
-				send_error(D, from, fromlen, tid, tid_len,
-					203, "Announce_peer with wrong token");
-				return;
-			}
 			if (value_len == 0) {
-				debugf(D, "Announce_peer with forbidden port %d.\n", value_len);
+				debugf(D, "error Announce_peer with forbidden port %d.\n", value_len);
 				send_error(D, from, fromlen, tid, tid_len,
 					203, "Announce_peer with forbidden port number");
 				return;
@@ -2759,18 +2733,27 @@ const struct sockaddr *from, int fromlen
 
 			///选择一个最近的临近节点将消息转发给他
 			node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-
 			///It is necessary to send 3 times continuously to detect the non arrival rate
-			if (++isequence <= MAXANNOUNCE && n){
+			if (++isequence < MAXANNOUNCE && n){
+				unsigned short port=0;
+				if (n->ss.ss_family == AF_INET ){
+					sockaddr_in* si = (sockaddr_in*)&n->ss;
+					port = ntohs(si->sin_port);
+				}else{
+					sockaddr_in6* si = (sockaddr_in6*)&n->ss;
+					port = ntohs(si->sin6_port);
+				}
+				debugf(D, "at %d Sending peer announced to port %d.\n", isequence, port);
 				send_announce_peer(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&order_in : (struct sockaddr*)&order_in6,
 					n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
 					(struct sockaddr*)&n->ss,
-					sizeof(struct sockaddr_storage),
+					n->sslen,
 					tid, 4, info_hash, IDLEN,
 					(unsigned char*)value, value_len,
 					token, token_len,
 					n->reply_time >= D->now.tv_sec - 15, isequence);
-			}
+			}else
+				debugf(D, "at %d not find neighbourhoodup.\n", isequence);
 		}
 
 		if (!token_bucket(D)) {
