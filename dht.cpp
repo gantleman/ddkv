@@ -364,7 +364,7 @@ static int send_get_peers(pdht D, const struct sockaddr *hsa, int hsalen,
 	const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
 	unsigned char *infohash, int want, int confirm, int sequence);
-static int send_announce_peer(pdht D, const struct sockaddr *hsa, int hsalen, 
+static int send_announce_peer(pdht D, const struct sockaddr *hsa, int hsalen,
 	const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
 	unsigned char *info_hash, int info_hash_len,
@@ -585,7 +585,7 @@ unsigned short *seqno_return)
 
 /* Called whenever we send a request to a node, increases the ping count
    and, if that reaches 3, sends a ping to a new candidate. */
-static void 
+static void
 pinged(pdht D, struct node *n)
 {
 	n->pinged++;
@@ -674,7 +674,8 @@ int confirm)
 				n->pinged_time = 0;
 			}
 		}
-	}else{
+	}
+	else{
 		//new node
 		struct node* n = &(*r)[k];
 
@@ -702,10 +703,11 @@ expire_buckets(pdht D, std::map<std::vector<unsigned char>, node> *routetable)
 {
 
 	std::map<std::vector<unsigned char>, node>::iterator iter = routetable->begin();
-	for (; iter != routetable->end(); ){
+	for (; iter != routetable->end();){
 		if (iter->second.pinged >= 4){
 			iter = routetable->erase(iter);
-		}else
+		}
+		else
 			iter++;
 	}
 	D->expire_stuff_time = D->now.tv_sec + 120 + random() % 240;
@@ -951,7 +953,8 @@ search_step(pdht D, struct search *sr)
 				goto done;
 			}
 
-		}else {
+		}
+		else {
 			///begin step announce peer
 			if (!sr->getpeer){
 				sr->getpeer = 1;
@@ -991,6 +994,10 @@ search_step(pdht D, struct search *sr)
 				///outtime try again
 			}
 			else if (sr->gpnode.size() >= MAXANNOUNCE){
+				if (sr->callback)
+					(*sr->callback)((DHT)D, sr->closure,
+									sr->af == AF_INET ?DHT_EVENT_SEARCH_DONE : DHT_EVENT_SEARCH_DONE6,
+									sr->id, NULL, 0);
 				goto done;
 			}
 		}
@@ -1000,7 +1007,7 @@ search_step(pdht D, struct search *sr)
 
 	if (sr->step_time + 15 >= D->now.tv_sec)
 		return;
-	
+
 	j = 0;
 	for (i = 0; i < sr->numnodes; i++) {
 		j += search_send(D, sr, &sr->nodes[i]);
@@ -1147,7 +1154,7 @@ const char* buf, int len)
 		D->storage = st;
 		D->numstorage++;
 	}
-	
+
 	st->speer.time = D->now.tv_sec;
 	st->speer.buf.resize(len);
 	memcpy(&st->speer.buf[0], buf, len);
@@ -1381,9 +1388,9 @@ dht_dump_tables(DHT iD, FILE *f)
 }
 
 int
-dht_init(DHT* OutD, int s, int s6, const unsigned char *id, 
-		const unsigned char *v, FILE* df,
-		struct sockaddr_in &sin,struct sockaddr_in6 &sin6)
+dht_init(DHT* OutD, int s, int s6, const unsigned char *id,
+const unsigned char *v, FILE* df,
+struct sockaddr_in &sin, struct sockaddr_in6 &sin6)
 {
 	int rc;
 	pdht D = new dht;
@@ -1510,7 +1517,7 @@ neighbourhood_maintenance(pdht D, int af)
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->begin();
 	int ir = random() % r->size();
 
-	for (int i = 0; iter != r->end(), i < ir ; iter++, i++){}
+	for (int i = 0; iter != r->end(), i < ir; iter++, i++){}
 	node* n = &iter->second;
 	if (n) {
 		int want = D->dht_socket >= 0 && D->dht_socket6 >= 0 ? (WANT4 | WANT6) : -1;
@@ -1659,13 +1666,14 @@ struct sockaddr_in6 *sin6, int *num6)
 		node* n = &iter->second;
 		if (i <= *num){
 			if (node_good(D, n)) {
-			sin[i++] = *(struct sockaddr_in*)&n->ss;
+				sin[i++] = *(struct sockaddr_in*)&n->ss;
 			}
-		}else
+		}
+		else
 			break;
 
 	}
-	
+
 	r = &D->routetable6;
 	int j = 0;
 	for (; iter != r->end(); iter++){
@@ -1729,7 +1737,7 @@ dht_ping_node(DHT iD, const struct sockaddr *sa, int salen)
 #define ADD_V(buf, offset, size)                        \
     if(D->have_v) {                                        \
         COPY(buf, offset, D->my_v, sizeof(D->my_v), size);    \
-	    }
+		    }
 
 static int
 dht_send(pdht D, const void *buf, size_t len, int flags,
@@ -1834,7 +1842,7 @@ const unsigned char *token, int token_len)
 		   chosen slice.  In order to make sure we fit within 1024 octets,
 		   we limit ourselves to 50 peers. */
 		rc = snprintf(buf + i, 2048 - i, "5:value"); INC(i, rc, 2048);
-		rc = snprintf(buf + i, 2048 - i, "%d:", st->speer.buf.size());INC(i, rc, 2048);
+		rc = snprintf(buf + i, 2048 - i, "%d:", st->speer.buf.size()); INC(i, rc, 2048);
 		COPY(buf, i, &st->speer.buf[0], st->speer.buf.size(), 2048);
 	}
 	rc = snprintf(buf + i, 2048 - i, "e1:t%d:", tid_len); INC(i, rc, 2048);
@@ -1935,14 +1943,14 @@ const unsigned char *id, std::map<std::vector<unsigned char>, node> *r)
 	memcpy(&k[0], id, IDLEN);
 
 	std::map<std::vector<unsigned char>, node>::iterator iter2, iter = iter2 = r->lower_bound(k);
-	for (int i = 0; iter != r->end() && i < 8 ; iter--)
+	for (int i = 0; iter != r->end() && i < 8; iter--)
 	{
 		struct node *n = &iter->second;
 		if (node_good(D, n)){
 			i++;
 			numnodes = insert_closest_node(nodes, numnodes, id, n);
 		}
-			
+
 
 	}
 
@@ -1953,7 +1961,7 @@ const unsigned char *id, std::map<std::vector<unsigned char>, node> *r)
 			i++;
 			numnodes = insert_closest_node(nodes, numnodes, id, n);
 		}
-			
+
 	}
 	return numnodes;
 }
@@ -1963,14 +1971,14 @@ static node* neighbourhoodup(pdht D, const unsigned char *id,
 {
 	if (r->empty())
 		return 0;
-	
+
 	std::vector<unsigned char> k;
 	k.resize(IDLEN);
 	memcpy(&k[0], id, IDLEN);
 	std::map<std::vector<unsigned char>, node>::iterator iter, iter2 = r->lower_bound(k);
 	iter = iter2;
 	iter--;
-	for (int i = 0; i < int(r->size()*2); i++){
+	for (int i = 0; i < int(r->size() * 2); i++){
 		if (iter == r->end()){
 			iter--;
 			continue;
@@ -2110,10 +2118,11 @@ unsigned char *token, int token_len, int confirm, int sequence)
 	COPY(buf, i, token, token_len, 512);
 	if (hsa->sa_family == AF_INET){
 		sockaddr_in* sd_in = (sockaddr_in*)hsa;
-		rc = snprintf(buf + i, 512 - i, "5:order%d:", 6);INC(i, rc, 512);
+		rc = snprintf(buf + i, 512 - i, "5:order%d:", 6); INC(i, rc, 512);
 		COPY(buf, i, &sd_in->sin_addr, 4, 512);
 		COPY(buf, i, &sd_in->sin_port, 2, 512);
-	}else{
+	}
+	else{
 		sockaddr_in6* sd_in = (sockaddr_in6*)hsa;
 		rc = snprintf(buf + i, 512 - i, "5:order%d:", 18); INC(i, rc, 512);
 		COPY(buf, i, &sd_in->sin6_addr, 16, 512);
@@ -2309,7 +2318,8 @@ const struct sockaddr *from, int fromlen
 							(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
 							(void*)value, value_len);
 					}
-				}else{
+				}
+				else{
 					(*sr->callback)((DHT)D, sr->closure, DHT_EVENT_VALUES, sr->id,
 						(void*)0, 0);
 				}
@@ -2462,7 +2472,7 @@ const struct sockaddr *from, int fromlen
 			debugf(D, "\n");
 		}
 	}
-	else if (y_return[0] ==  'q'){
+	else if (y_return[0] == 'q'){
 		unsigned char *q_return;
 		int q_len;
 		b_find(&e, "q", &q_return, q_len);
@@ -2566,7 +2576,8 @@ const struct sockaddr *from, int fromlen
 				send_error(D, from, fromlen, tid, tid_len,
 					203, "Get_peers with no info_hash");
 				return;
-			}else {
+			}
+			else {
 				struct storage *st = find_storage(D, info_hash);
 				unsigned char token[TOKEN_SIZE];
 				make_token(D, from, 0, token);
@@ -2598,7 +2609,8 @@ const struct sockaddr *from, int fromlen
 						info_hash, want,
 						from->sa_family, st,
 						token, TOKEN_SIZE);
-				}else {
+				}
+				else {
 					node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 
 					///It is necessary to send 3 times continuously to detect the non arrival rate
@@ -2607,11 +2619,12 @@ const struct sockaddr *from, int fromlen
 							n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
 							(struct sockaddr*)&n->ss, n->sslen, tid, 4, info_hash, -1,
 							n->reply_time >= D->now.tv_sec - 15, isequence);
-					}else{
-					debugf(D, "Sending nodes for get_peers.\n");
-					send_closest_nodes(D, to, to_len,
-						tid, tid_len, info_hash, want,
-						0, NULL, token, TOKEN_SIZE);
+					}
+					else{
+						debugf(D, "Sending nodes for get_peers.\n");
+						send_closest_nodes(D, to, to_len,
+							tid, tid_len, info_hash, want,
+							0, NULL, token, TOKEN_SIZE);
 					}
 				}
 			}
@@ -2658,7 +2671,7 @@ const struct sockaddr *from, int fromlen
 				debugf(D, "Sending nodes for search.\n");
 				send_closest_nodes(D, from, fromlen,
 					tid, tid_len, info_hash, want,
-					0, NULL, token, TOKEN_SIZE);			
+					0, NULL, token, TOKEN_SIZE);
 			}
 		}
 		else if (memcmp(q_return, "announce_peer", q_len) == 0)
@@ -2729,10 +2742,11 @@ const struct sockaddr *from, int fromlen
 			if (order_len == 6){
 				order_in.sin_family = AF_INET;
 				memcpy((void*)&order_in.sin_addr, order, 4);
-				memcpy((void*)&order_in.sin_port, order+4, 2);
+				memcpy((void*)&order_in.sin_port, order + 4, 2);
 				to = (sockaddr*)&order_in;
 				to_len = sizeof(order_in);
-			}else if (order_len == 18){
+			}
+			else if (order_len == 18){
 				order_in6.sin6_family = AF_INET6;
 				memcpy((void*)&order_in6.sin6_addr, order, 16);
 				memcpy((void*)&order_in6.sin6_port, order + 16, 2);
