@@ -536,7 +536,6 @@ static struct node *
 find_node(pdht D, const unsigned char *id, int af)
 {
 	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
-
 	std::vector<unsigned char> k;
 	k.resize(IDLEN);
 	memcpy(&k[0], id, IDLEN);
@@ -1117,7 +1116,7 @@ dht_callback *callback, void *closure, const char* buf, int len)
 
 	search_step(D, sr);
 	D->search_time = D->now.tv_sec;
-	return 1;
+	return sr->tid;
 }
 
 /* A struct storage stores all the stored peer addresses for a given info
