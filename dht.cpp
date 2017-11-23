@@ -245,11 +245,6 @@ struct peer {
 	std::vector<char> buf;     //data block
 };
 
-/* The maximum number of hashes we're willing to track. */
-#ifndef DHT_MAX_HASHES
-#define DHT_MAX_HASHES 16384
-#endif
-
 /* The maximum number of searches we keep data about. */
 #ifndef DHT_MAX_SEARCHES
 #define DHT_MAX_SEARCHES 1024
@@ -259,12 +254,6 @@ struct peer {
 #ifndef DHT_SEARCH_EXPIRE_TIME
 #define DHT_SEARCH_EXPIRE_TIME (62 * 60)
 #endif
-
-struct storage {
-	unsigned char id[IDLEN];
-	struct peer speer;
-	struct storage *next;
-};
 
 #define ERROR 0
 #define REPLY 1
@@ -309,8 +298,7 @@ typedef struct _dht
 	unsigned char secret[8];
 	unsigned char oldsecret[8];
 
-	struct storage *storage;
-	int numstorage;
+	std::map<std::vector<unsigned char>, peer> storage;
 
 	struct search *searches;
 	int numsearches;
@@ -336,7 +324,7 @@ typedef struct _dht
 
 }*pdht, dht;
 
-static struct storage * find_storage(pdht D, const unsigned char *id);
+static struct peer * find_storage(pdht D, const unsigned char *id);
 static void flush_search_node(struct search_node *n, struct search *sr);
 
 static int send_ping(pdht D, const struct sockaddr *sa, int salen,
@@ -355,7 +343,7 @@ static int send_nodes_peers(pdht D, const struct sockaddr *sa, int salen,
 static int send_closest_nodes(pdht D, const struct sockaddr *sa, int salen,
 	const unsigned char *tid, int tid_len,
 	const unsigned char *id, int want,
-	int af, struct storage *st,
+	int af, struct peer *sp,
 	const unsigned char *token, int token_len);
 static int send_search(pdht D, const struct sockaddr *sa, int salen,
 	unsigned char *tid, int tid_len,
@@ -1077,17 +1065,17 @@ dht_callback *callback, void *closure, const char* buf, int len)
 	pdht D = (pdht)iD;
 
 	struct search *sr;
-	struct storage *st;
+	struct peer *rp;
 
 	/* Try to answer this search locally.  In a fully grown DHT this
 	   is very unlikely, but people are running modified versions of
 	   this code in private DHTs with very few nodes.  What's wrong
 	   with flooding? */
 	if (callback) {
-		st = find_storage(D, id);
-		if (st) {
+		rp = find_storage(D, id);
+		if (rp) {
 			(*callback)((DHT)D, closure, DHT_EVENT_VALUES, id,
-				(void*)&st->speer.buf[0], st->speer.buf.size());
+				(void*)&rp->buf[0], rp->buf.size());
 		}
 	}
 
@@ -1121,71 +1109,51 @@ dht_callback *callback, void *closure, const char* buf, int len)
 
 /* A struct storage stores all the stored peer addresses for a given info
    hash. */
-
-static struct storage *
+static struct peer *
 find_storage(pdht D, const unsigned char *id)
 {
-	struct storage *st = D->storage;
-
-	while (st) {
-		if (id_cmp(id, st->id) == 0)
-			break;
-		st = st->next;
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+	std::map<std::vector<unsigned char>, peer>::iterator iter = D->storage.find(k);
+	if (iter != D->storage.end()){
+		return &iter->second;
 	}
-	return st;
+	return 0;
 }
 
 static int
 storage_store(pdht D, const unsigned char *id,
 const char* buf, int len)
 {
-	struct storage *st;
-
-	st = find_storage(D, id);
-
-	if (st == NULL) {
-		if (D->numstorage >= DHT_MAX_HASHES)
-			return -1;
-		st = (storage *)calloc(1, sizeof(struct storage));
-		if (st == NULL) return -1;
-		memcpy(st->id, id, IDLEN);
-		st->next = D->storage;
-		D->storage = st;
-		D->numstorage++;
+	struct peer *sp;
+	sp = find_storage(D, id);
+	if (sp == NULL) {
+		std::vector<unsigned char> k;
+		k.resize(IDLEN);
+		memcpy(&k[0], id, IDLEN);
+		sp = &D->storage[k];
 	}
 
-	st->speer.time = D->now.tv_sec;
-	st->speer.buf.resize(len);
-	memcpy(&st->speer.buf[0], buf, len);
+	sp->time = D->now.tv_sec;
+	sp->buf.resize(len);
+	memcpy(&sp->buf[0], buf, len);
 	return 1;
 }
 
 static int
 expire_storage(pdht D)
 {
-	struct storage *st = D->storage, *previous = NULL;
-	while (st) {
-		if (st->speer.time < D->now.tv_sec - 32 * 60) {
-			if (previous)
-				previous->next = st->next;
-			else
-				D->storage = st->next;
-			free(st);
-			if (previous)
-				st = previous->next;
-			else
-				st = D->storage;
-			D->numstorage--;
-			if (D->numstorage < 0) {
-				debugf(D, "Eek... numstorage became negative.\n");
-				D->numstorage = 0;
-			}
+	std::map<std::vector<unsigned char>, peer>::iterator iter = D->storage.begin();
+	for (; iter != D->storage.end(); iter++)
+	{
+		if (iter->second.time < D->now.tv_sec - 32 * 60){
+			iter = D->storage.erase(iter);
 		}
-		else {
-			previous = st;
-			st = st->next;
-		}
+		else
+			iter++;
 	}
+	
 	return 1;
 }
 
@@ -1318,10 +1286,8 @@ void
 dht_dump_tables(DHT iD, FILE *f)
 {
 	pdht D = (pdht)iD;
-
 	int i;
 	std::map<std::vector<unsigned char>, node> *b;
-	struct storage *st = D->storage;
 	struct search *sr = D->searches;
 
 	fprintf(f, "My id ");
@@ -1357,16 +1323,18 @@ dht_dump_tables(DHT iD, FILE *f)
 		}
 		sr = sr->next;
 	}
-
-	while (st) {
+	std::map<std::vector<unsigned char>, peer>::iterator iter = D->storage.begin();
+	for (; iter != D->storage.end();)
+	{
+		struct peer* sp = &iter->second;
 		fprintf(f, "\nStorage ");
-		print_hex(f, st->id, IDLEN);
+		print_hex(f, &iter->first[0], IDLEN);
 
 		fprintf(f, "[");
-		print_hex(f, (unsigned char*)&st->speer.buf[0], st->speer.buf.size());
-		fprintf(f, "](%ld)", (long)(D->now.tv_sec - st->speer.time));
-		st = st->next;
+		print_hex(f, (unsigned char*)&sp->buf[0], sp->buf.size());
+		fprintf(f, "](%ld)", (long)(D->now.tv_sec - sp->time));
 	}
+
 	fprintf(f, "\n\n");
 	fflush(f);
 }
@@ -1383,9 +1351,6 @@ struct sockaddr_in &sin, struct sockaddr_in6 &sin6)
 
 	D->searches = NULL;
 	D->numsearches = 0;
-
-	D->storage = NULL;
-	D->numstorage = 0;
 
 	if (s >= 0) {
 		rc = set_nonblocking(s, 1);
@@ -1454,12 +1419,6 @@ dht_uninit(DHT iD)
 
 	D->dht_socket = -1;
 	D->dht_socket6 = -1;
-
-	while (D->storage) {
-		struct storage *st = D->storage;
-		D->storage = D->storage->next;
-		free(st);
-	}
 
 	while (D->searches) {
 		struct search *sr = D->searches;
@@ -1797,7 +1756,7 @@ send_nodes_peers(pdht D, const struct sockaddr *sa, int salen,
 const unsigned char *tid, int tid_len,
 const unsigned char *nodes, int nodes_len,
 const unsigned char *nodes6, int nodes6_len,
-int af, struct storage *st,
+int af, struct peer *sp,
 const unsigned char *token, int token_len)
 {
 	char buf[2048];
@@ -1821,13 +1780,13 @@ const unsigned char *token, int token_len)
 		COPY(buf, i, token, token_len, 2048);
 	}
 
-	if (st) {
+	if (sp) {
 		/* We treat the storage as a circular list, and serve a randomly
 		   chosen slice.  In order to make sure we fit within 1024 octets,
 		   we limit ourselves to 50 peers. */
 		rc = snprintf(buf + i, 2048 - i, "5:value"); INC(i, rc, 2048);
-		rc = snprintf(buf + i, 2048 - i, "%d:", st->speer.buf.size()); INC(i, rc, 2048);
-		COPY(buf, i, &st->speer.buf[0], st->speer.buf.size(), 2048);
+		rc = snprintf(buf + i, 2048 - i, "%d:", sp->buf.size()); INC(i, rc, 2048);
+		COPY(buf, i, &sp->buf[0], sp->buf.size(), 2048);
 	}
 	rc = snprintf(buf + i, 2048 - i, "e1:t%d:", tid_len); INC(i, rc, 2048);
 	COPY(buf, i, tid, tid_len, 2048);
@@ -1978,7 +1937,7 @@ int
 send_closest_nodes(pdht D, const struct sockaddr *sa, int salen,
 const unsigned char *tid, int tid_len,
 const unsigned char *id, int want,
-int af, struct storage *st,
+int af, struct peer *sp,
 const unsigned char *token, int token_len)
 {
 	unsigned char nodes[8 * 26];
@@ -1999,7 +1958,7 @@ const unsigned char *token, int token_len)
 	return send_nodes_peers(D, sa, salen, tid, tid_len,
 		nodes, numnodes * 26,
 		nodes6, numnodes6 * 38,
-		af, st, token, token_len);
+		af, sp, token, token_len);
 }
 
 int
@@ -2556,7 +2515,7 @@ const struct sockaddr *from, int fromlen
 				return;
 			}
 			else {
-				struct storage *st = find_storage(D, info_hash);
+				struct peer *sp = find_storage(D, info_hash);
 				unsigned char token[TOKEN_SIZE];
 				make_token(D, from, 0, token);
 
@@ -2579,13 +2538,13 @@ const struct sockaddr *from, int fromlen
 					to_len = sizeof(order_in6);
 				}
 
-				if (st) {
+				if (sp) {
 					debugf(D, "Sending found %s peers.\n",
 						from->sa_family == AF_INET6 ? " IPv6" : "");
 					send_closest_nodes(D, to, to_len,
 						tid, tid_len,
 						info_hash, want,
-						from->sa_family, st,
+						from->sa_family, sp,
 						token, TOKEN_SIZE);
 				}
 				else {
