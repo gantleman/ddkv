@@ -324,6 +324,7 @@ typedef struct _dht
 	std::map<std::vector<unsigned char>, node> routetable6;
 
 	std::map<std::vector<unsigned char>, time_t> gossip;
+	time_t gossip_expire_time;
 }*pdht, dht;
 
 static struct peer * find_storage(pdht D, const unsigned char *id);
@@ -367,7 +368,7 @@ static int send_error(pdht D, const struct sockaddr *sa, int salen,
 	int code, const char *message);
 static void process_message(pdht D, const unsigned char *buf, int buflen,
 	const struct sockaddr *from, int fromlen);
-
+static void expire_gossip(pdht D);
 #ifdef __GNUC__
 __attribute__ ((format (printf, 1, 2)))
 #endif
@@ -1556,6 +1557,10 @@ time_t *tosleep)
 			*tosleep = D->search_time - D->now.tv_sec;
 	}
 
+	if (D->now.tv_sec - D->gossip_expire_time > 10 * 60){
+		D->gossip_expire_time = D->now.tv_sec;
+		expire_gossip(D);
+	}
 	return 1;
 }
 
@@ -2087,6 +2092,43 @@ int code, const char *message)
 fail:
 	errno = ENOSPC;
 	return -1;
+}
+
+void
+send_gossip(pdht D, unsigned char *gid, const char* buf, int len)
+{
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], gid, IDLEN);
+
+	std::map<std::vector<unsigned char>, time_t>::iterator iterg = D->gossip.find(k);
+	if (iterg == D->gossip.end())
+		return;
+
+	D->gossip[k] = D->now.tv_sec;
+	std::map<std::vector<unsigned char>, node>::iterator iter = D->routetable.begin();
+	for (; iter != D->routetable.end(); iter++)
+	{
+		dht_send(D, buf, len, 0, (const sockaddr *)&iter->second.ss, iter->second.sslen);
+	}
+	std::map<std::vector<unsigned char>, node>::iterator iter6 = D->routetable6.begin();
+	for (; iter6 != D->routetable.end(); iter6++)
+	{
+		dht_send(D, buf, len, 0, (const sockaddr *)&iter6->second.ss, iter6->second.sslen);
+	}
+}
+
+static void
+expire_gossip(pdht D)
+{
+	std::map<std::vector<unsigned char>, time_t>::iterator iterg = D->gossip.begin();
+	for (; iterg != D->gossip.end();){
+		if (D->now.tv_sec - iterg->second > 10 * 60){
+			iterg = D->gossip.erase(iterg);
+		}
+		else
+			iterg++;
+	}
 }
 
 #undef CHECK
