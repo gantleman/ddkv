@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include <map>
 #include <vector>
 #include <assert.h>
+#include <set>
 
 #if !defined(_WIN32) || defined(__MINGW32__)
 #include <sys/time.h>
@@ -240,7 +241,7 @@ struct search {
 };
 
 struct peer {
-	unsigned short head;///0 normal, 1 is head
+	unsigned short stat;///0 normal, 1 is head
 	time_t time;
 	std::vector<char> buf;     //data block
 };
@@ -322,6 +323,7 @@ typedef struct _dht
 	std::map<std::vector<unsigned char>, node> routetable;
 	std::map<std::vector<unsigned char>, node> routetable6;
 
+	std::map<std::vector<unsigned char>, time_t> gossip;
 }*pdht, dht;
 
 static struct peer * find_storage(pdht D, const unsigned char *id);
@@ -884,7 +886,7 @@ search_step(pdht D, struct search *sr)
 					I don't think this makes a lot of sense -- just sending
 					a positive reply is just as good --, let's deal with it. */
 					sendap = 1;
-					debugf(D, "Sending get_peers.\n");
+					debugf(D, "Sending get peers.\n");
 					make_tid(tid, "gp", sr->tid);
 					debugf_hex(D, "tid:", tid, 4);
 					send_get_peers(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&D->sin : (struct sockaddr*) &D->sin6,
@@ -899,7 +901,7 @@ search_step(pdht D, struct search *sr)
 					break;
 				}
 				if (!sendap){
-					debugf(D, "Sending get_peers error.\n");
+					debugf(D, "Sending get peers error.\n");
 				}
 			}
 			else if (sr->gpnode.size() < MAXGETPEER && D->now.tv_sec - sr->step_time > 60){
@@ -926,7 +928,7 @@ search_step(pdht D, struct search *sr)
 					   I don't think this makes a lot of sense -- just sending
 					   a positive reply is just as good --, let's deal with it. */
 					sendap = 1;
-					debugf(D, "Sending announce_peer.\n");
+					debugf(D, "Sending announce peer.\n");
 					make_tid(tid, "ap", sr->tid);
 					send_announce_peer(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&D->sin : (struct sockaddr*)&D->sin6,
 						n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
@@ -943,7 +945,7 @@ search_step(pdht D, struct search *sr)
 					break;
 				}
 				if (!sendap){
-					debugf(D, "Sending announce_peer error.\n");
+					debugf(D, "Sending announce peer error.\n");
 				}
 			}
 			else if (sr->gpnode.size() < MAXANNOUNCE && D->now.tv_sec - sr->step_time > 60){
@@ -976,6 +978,7 @@ search_step(pdht D, struct search *sr)
 	return;
 
 done:
+	debugf(D, "search step %d done.\n", sr->tid);
 	sr->done = 1;
 	sr->step_time = D->now.tv_sec;
 }
@@ -1080,7 +1083,7 @@ find_storage(pdht D, const unsigned char *id)
 }
 
 static int
-storage_store(pdht D, const unsigned char *id,
+storage_store(pdht D, const unsigned char *id, int stat,
 const char* buf, int len)
 {
 	struct peer *sp;
@@ -1094,6 +1097,7 @@ const char* buf, int len)
 
 	sp->time = D->now.tv_sec;
 	sp->buf.resize(len);
+	sp->stat = stat;
 	memcpy(&sp->buf[0], buf, len);
 	return 1;
 }
@@ -2621,7 +2625,7 @@ const struct sockaddr *from, int fromlen
 					203, "Announce_peer with forbidden port number");
 				return;
 			}
-			storage_store(D, info_hash, (const char*)value, value_len);
+			storage_store(D, info_hash, ++isequence == 1 ? 1 : isequence == MAXANNOUNCE ? 2:0, (const char*)value, value_len);
 			/* Note that if storage_store failed, we lie to the requestor.
 			This is to prevent them from backtracking, and hence
 			polluting the DHT. */
@@ -2651,7 +2655,7 @@ const struct sockaddr *from, int fromlen
 			///选择一个最近的临近节点将消息转发给他
 			node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 			///It is necessary to send 3 times continuously to detect the non arrival rate
-			if (++isequence < MAXANNOUNCE && n){
+			if (isequence < MAXANNOUNCE && n){
 				unsigned short port=0;
 				if (n->ss.ss_family == AF_INET ){
 					sockaddr_in* si = (sockaddr_in*)&n->ss;
