@@ -846,42 +846,6 @@ search_send(pdht D, struct search *sr, struct search_node *n)
 	return 1;
 }
 
-/* This must always return 0 or 1, never -1, not even on failure (see below). */
-static int
-get_peers_send(pdht D, struct search *sr, struct search_node *n)
-{
-	struct node *node;
-	unsigned char tid[4];
-
-	if (n == NULL) {
-		int i;
-		for (i = 0; i < sr->numnodes; i++) {
-			if (sr->nodes[i].pinged < 3 && !sr->nodes[i].replied &&
-				sr->nodes[i].request_time < D->now.tv_sec - 15)
-				n = &sr->nodes[i];
-		}
-	}
-
-	if (!n || n->pinged >= 3 || n->replied ||
-		n->request_time >= D->now.tv_sec - 15)
-		return 0;
-
-	debugf(D, "Sending get_peers.\n");
-	make_tid(tid, "gp", sr->tid);
-	debugf_hex(D, "tid:", tid, 4);
-	send_get_peers(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&D->sin : (struct sockaddr*) &D->sin6,
-		n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
-		(struct sockaddr*)&n->ss, n->sslen, tid, 4, sr->id, -1,
-		n->reply_time >= D->now.tv_sec - 15, 0);
-	n->pinged++;
-	n->request_time = D->now.tv_sec;
-	/* If the node happens to be in our main routing table, mark it
-	   as pinged. */
-	node = find_node(D, n->id, n->ss.ss_family);
-	if (node) pinged(D, node);
-	return 1;
-}
-
 /* When a search is in progress, we periodically call search_step to send
    further requests. */
 static void
@@ -912,6 +876,7 @@ search_step(pdht D, struct search *sr)
 				for (i = 0; i < sr->numnodes; i++) {
 					struct search_node *n = &sr->nodes[i];
 					struct node *node;
+					unsigned char tid[4];
 					if (n->pinged >= 3)
 						continue;
 					/* A proposed extension to the protocol consists in
@@ -920,7 +885,13 @@ search_step(pdht D, struct search *sr)
 					a positive reply is just as good --, let's deal with it. */
 					sendap = 1;
 					debugf(D, "Sending get_peers.\n");
-					get_peers_send(D, sr, &sr->nodes[i]);
+					make_tid(tid, "gp", sr->tid);
+					debugf_hex(D, "tid:", tid, 4);
+					send_get_peers(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&D->sin : (struct sockaddr*) &D->sin6,
+						n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
+						(struct sockaddr*)&n->ss, n->sslen, tid, 4, sr->id, -1,
+						n->reply_time >= D->now.tv_sec - 15, 0);
+
 					n->pinged++;
 					n->request_time = D->now.tv_sec;
 					node = find_node(D, n->id, n->ss.ss_family);
@@ -1063,21 +1034,7 @@ dht_search(DHT iD, const unsigned char *id, int pg, int af,
 dht_callback *callback, void *closure, const char* buf, int len)
 {
 	pdht D = (pdht)iD;
-
 	struct search *sr;
-	struct peer *rp;
-
-	/* Try to answer this search locally.  In a fully grown DHT this
-	   is very unlikely, but people are running modified versions of
-	   this code in private DHTs with very few nodes.  What's wrong
-	   with flooding? */
-	if (callback) {
-		rp = find_storage(D, id);
-		if (rp) {
-			(*callback)((DHT)D, closure, DHT_EVENT_VALUES, id,
-				(void*)&rp->buf[0], rp->buf.size());
-		}
-	}
 
 	sr = new_search(D);
 	if (sr == NULL) {
@@ -1144,8 +1101,9 @@ const char* buf, int len)
 static int
 expire_storage(pdht D)
 {
+	debugf(D, "expire_storage.\n");
 	std::map<std::vector<unsigned char>, peer>::iterator iter = D->storage.begin();
-	for (; iter != D->storage.end(); iter++)
+	for (; iter != D->storage.end();)
 	{
 		if (iter->second.time < D->now.tv_sec - 32 * 60){
 			iter = D->storage.erase(iter);
@@ -1161,7 +1119,6 @@ static int
 rotate_secrets(pdht D)
 {
 	int rc;
-
 	D->rotate_secrets_time = D->now.tv_sec + 900 + random() % 1800;
 
 	memcpy(D->oldsecret, D->secret, sizeof(D->secret));
@@ -1210,6 +1167,7 @@ dht_nodes(DHT iD, int af, int *good_return, int *dubious_return,
 int *incoming_return)
 {
 	pdht D = (pdht)iD;
+	debugf(D, "dht_nodes.\n");
 	int good = 0, dubious = 0, incoming = 0;
 	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->begin();
@@ -2235,6 +2193,7 @@ const struct sockaddr *from, int fromlen
 				}
 			}
 			if (sr) {
+				debugf(D, "analysis get peer!\n");
 				unsigned char* token;
 				int token_len;
 				b_find(r, "token", &token, token_len);
@@ -2540,7 +2499,7 @@ const struct sockaddr *from, int fromlen
 
 				if (sp) {
 					debugf(D, "Sending found %s peers.\n",
-						from->sa_family == AF_INET6 ? " IPv6" : "");
+						from->sa_family == AF_INET6 ? " IPv6" : "IPv4");
 					send_closest_nodes(D, to, to_len,
 						tid, tid_len,
 						info_hash, want,

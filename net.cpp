@@ -124,8 +124,7 @@ callback(DHT D, void *closure,
 {
     if(event == DHT_EVENT_SEARCH_DONE)
         printf("Search done.\n");
-	else if (event == DHT_EVENT_VALUES)
-	{
+	else if (event == DHT_EVENT_VALUES){
 		std::string value;
 		value.append((char*)data, data_len);
 		printf("Received %s, %d values.\n", value.c_str(), data_len);
