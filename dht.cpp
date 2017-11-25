@@ -369,6 +369,11 @@ static int send_error(pdht D, const struct sockaddr *sa, int salen,
 static void process_message(pdht D, const unsigned char *buf, int buflen,
 	const struct sockaddr *from, int fromlen);
 static void expire_gossip(pdht D);
+static void send_gossip(pdht D, unsigned char *gid, 
+	const char* buf, int len);
+static void send_gossip_step(pdht D, unsigned char *gid,
+	const char* buf, int len);
+
 #ifdef __GNUC__
 __attribute__ ((format (printf, 1, 2)))
 #endif
@@ -2094,9 +2099,10 @@ fail:
 	return -1;
 }
 
-void
-send_gossip(pdht D, unsigned char *gid, const char* buf, int len)
+static void
+send_gossip_step(pdht D, unsigned char *gid, const char* buf, int len)
 {
+	debugf(D, "send gossip step.");
 	std::vector<unsigned char> k;
 	k.resize(IDLEN);
 	memcpy(&k[0], gid, IDLEN);
@@ -2119,8 +2125,19 @@ send_gossip(pdht D, unsigned char *gid, const char* buf, int len)
 }
 
 static void
+send_gossip(pdht D, const char* buf, int len)
+{
+	debugf(D, "send gossip.");
+	unsigned char gid[IDLEN];
+	dht_random_bytes(gid, IDLEN);
+	send_gossip_step(D, gid, buf, len);
+
+}
+
+static void
 expire_gossip(pdht D)
 {
+	debugf(D, "expire gossip.");
 	std::map<std::vector<unsigned char>, time_t>::iterator iterg = D->gossip.begin();
 	for (; iterg != D->gossip.end();){
 		if (D->now.tv_sec - iterg->second > 10 * 60){
