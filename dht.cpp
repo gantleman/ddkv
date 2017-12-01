@@ -311,6 +311,7 @@ typedef struct _dht
 	struct timeval now;
 	time_t mybucket_grow_time, mybucket6_grow_time;
 	time_t expire_stuff_time;
+	time_t expire_buckets_time;
 
 	time_t token_bucket_time;
 	int token_bucket_tokens;
@@ -325,6 +326,8 @@ typedef struct _dht
 
 	std::map<std::vector<unsigned char>, time_t> gossip;
 	time_t gossip_expire_time;
+
+	time_t ping_neighbourhood_time;
 }*pdht, dht;
 
 static struct peer * find_storage(pdht D, const unsigned char *id);
@@ -373,6 +376,8 @@ static void send_gossip(pdht D, unsigned char *gid,
 	const char* buf, int len);
 static void send_gossip_step(pdht D, unsigned char *gid,
 	const char* buf, int len);
+static node* neighbourhoodup(pdht D, const unsigned char *id,
+	std::map<std::vector<unsigned char>, node> *r);
 
 #ifdef __GNUC__
 __attribute__ ((format (printf, 1, 2)))
@@ -694,16 +699,25 @@ int confirm)
 static int
 expire_buckets(pdht D, std::map<std::vector<unsigned char>, node> *routetable)
 {
-
+	int nr = 0;// The next refresh
 	std::map<std::vector<unsigned char>, node>::iterator iter = routetable->begin();
 	for (; iter != routetable->end();){
-		if (iter->second.pinged >= 4){
+		if (iter->second.pinged >= 3 && D->now.tv_sec - iter->second.pinged_time > 2){
 			iter = routetable->erase(iter);
+			//TODO ·¢ËÍµôÏß¹ã²¥
+		}
+		else if (iter->second.pinged >= 3){
+			nr = 1;
+			iter++;
 		}
 		else
 			iter++;
 	}
-	D->expire_stuff_time = D->now.tv_sec + 120 + random() % 240;
+
+	if (nr = 1)
+		D->expire_buckets_time = D->now.tv_sec;
+	else
+		D->expire_buckets_time = D->now.tv_sec + random() % 10;
 	return 1;
 }
 
@@ -1319,6 +1333,10 @@ struct sockaddr_in &sin, struct sockaddr_in6 &sin6)
 
 	D->searches = NULL;
 	D->numsearches = 0;
+	D->gossip_expire_time = 0;
+	D->expire_stuff_time = 0;
+	D->expire_buckets_time = 0;
+	D->ping_neighbourhood_time = 0;
 
 	if (s >= 0) {
 		rc = set_nonblocking(s, 1);
@@ -1483,7 +1501,8 @@ const struct sockaddr *from, int fromlen,
 time_t *tosleep)
 {
 	pdht D = (pdht)iD;
-
+	///Time first is fixed in one second without considering optimization
+	*tosleep = 1;
 	dht_gettimeofday(&D->now, NULL);
 
 	if (buflen > 0) {
@@ -1494,7 +1513,6 @@ time_t *tosleep)
 				errno = EINVAL;
 				return -1;
 			}
-
 			process_message(D, (unsigned char*)buf, buflen, from, fromlen);
 		}
 	}
@@ -1502,9 +1520,13 @@ time_t *tosleep)
 	if (D->now.tv_sec >= D->rotate_secrets_time)
 		rotate_secrets(D);
 
-	if (D->now.tv_sec >= D->expire_stuff_time) {
+	if (D->now.tv_sec >= D->expire_buckets_time) {
 		expire_buckets(D, &D->routetable);
 		expire_buckets(D, &D->routetable6);
+	}
+
+	if (D->now.tv_sec - D->expire_stuff_time > 30 * 60){
+		D->expire_stuff_time = D->now.tv_sec;
 		expire_storage(D);
 		expire_searches(D);
 	}
@@ -1550,21 +1572,22 @@ time_t *tosleep)
 			D->confirm_nodes_time = D->now.tv_sec + 60 + random() % 120;
 	}
 
-	if (D->confirm_nodes_time > D->now.tv_sec)
-		*tosleep = D->confirm_nodes_time - D->now.tv_sec;
-	else
-		*tosleep = 0;
-
-	if (D->search_time > 0) {
-		if (D->search_time <= D->now.tv_sec)
-			*tosleep = 0;
-		else if (*tosleep > D->search_time - D->now.tv_sec)
-			*tosleep = D->search_time - D->now.tv_sec;
-	}
-
-	if (D->now.tv_sec - D->gossip_expire_time > 10 * 60){
+	if (D->now.tv_sec - D->gossip_expire_time > 10 * 60 || D->gossip.size() > 100){
 		D->gossip_expire_time = D->now.tv_sec;
 		expire_gossip(D);
+	}
+
+	if (D->now.tv_sec - D->ping_neighbourhood_time > 1){
+		D->ping_neighbourhood_time = D->now.tv_sec;
+		node* n = neighbourhoodup(D, D->myid, &D->routetable);
+		if (n){
+			dht_ping_node(D, (const struct sockaddr *)&n->ss, n->sslen);
+		}
+
+		n = neighbourhoodup(D, D->myid, &D->routetable6);
+		if (n){
+			dht_ping_node(D, (const struct sockaddr *)&n->ss, n->sslen);
+		}
 	}
 	return 1;
 }
