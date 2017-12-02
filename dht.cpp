@@ -241,7 +241,7 @@ struct search {
 };
 
 struct peer {
-	unsigned short stat;///0 normal, 1 is head
+	//Each node of the routing table can judge whether it is the head or tail of the data.
 	time_t time;
 	std::vector<char> buf;     //data block
 };
@@ -1103,7 +1103,7 @@ find_storage(pdht D, const unsigned char *id)
 }
 
 static int
-storage_store(pdht D, const unsigned char *id, int stat,
+storage_store(pdht D, const unsigned char *id,
 const char* buf, int len)
 {
 	struct peer *sp;
@@ -1117,7 +1117,6 @@ const char* buf, int len)
 
 	sp->time = D->now.tv_sec;
 	sp->buf.resize(len);
-	sp->stat = stat;
 	memcpy(&sp->buf[0], buf, len);
 	return 1;
 }
@@ -2707,7 +2706,7 @@ const struct sockaddr *from, int fromlen
 					203, "Announce_peer with forbidden port number");
 				return;
 			}
-			storage_store(D, info_hash, ++isequence == 1 ? 1 : isequence == MAXANNOUNCE ? 2:0, (const char*)value, value_len);
+			storage_store(D, info_hash, (const char*)value, value_len);
 			/* Note that if storage_store failed, we lie to the requestor.
 			This is to prevent them from backtracking, and hence
 			polluting the DHT. */
