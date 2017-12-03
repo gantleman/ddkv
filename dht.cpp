@@ -294,8 +294,6 @@ typedef struct _dht
 	time_t rotate_secrets_time;
 
 	unsigned char myid[IDLEN];
-	int have_v;
-	unsigned char my_v[9];
 	unsigned char v[4];
 	unsigned char secret[8];
 	unsigned char oldsecret[8];
@@ -1351,16 +1349,7 @@ struct sockaddr_in &sin, struct sockaddr_in6 &sin6)
 	}
 
 	memcpy(D->myid, id, IDLEN);
-	if (v) {
-		memcpy(D->my_v, "1:v4:", 5);
-		memcpy(D->my_v + 5, v, 4);
-		memcpy(D->v, v, 4);
-		D->have_v = 1;
-	}
-	else {
-		D->have_v = 0;
-	}
-
+	memcpy(D->v, v, 4);
 	dht_gettimeofday(&D->now, NULL);
 
 	D->mybucket_grow_time = D->now.tv_sec;
@@ -1747,44 +1736,23 @@ const unsigned char *nodes6, int nodes6_len,
 int af, struct peer *sp,
 const unsigned char *token, int token_len)
 {
-	char buf[2048];
-	int i = 0, rc;
-
-	rc = snprintf(buf + i, 2048 - i, "d1:rd2:id20:"); INC(i, rc, 2048);
-	COPY(buf, i, D->myid, IDLEN, 2048);
-	if (nodes_len > 0) {
-		rc = snprintf(buf + i, 2048 - i, "5:nodes%d:", nodes_len);
-		INC(i, rc, 2048);
-		COPY(buf, i, nodes, nodes_len, 2048);
-	}
-	if (nodes6_len > 0) {
-		rc = snprintf(buf + i, 2048 - i, "6:nodes6%d:", nodes6_len);
-		INC(i, rc, 2048);
-		COPY(buf, i, nodes6, nodes6_len, 2048);
-	}
-	if (token_len > 0) {
-		rc = snprintf(buf + i, 2048 - i, "5:token%d:", token_len);
-		INC(i, rc, 2048);
-		COPY(buf, i, token, token_len, 2048);
-	}
-
-	if (sp) {
-		/* We treat the storage as a circular list, and serve a randomly
-		   chosen slice.  In order to make sure we fit within 1024 octets,
-		   we limit ourselves to 50 peers. */
-		rc = snprintf(buf + i, 2048 - i, "5:value"); INC(i, rc, 2048);
-		rc = snprintf(buf + i, 2048 - i, "%d:", sp->buf.size()); INC(i, rc, 2048);
-		COPY(buf, i, &sp->buf[0], sp->buf.size(), 2048);
-	}
-	rc = snprintf(buf + i, 2048 - i, "e1:t%d:", tid_len); INC(i, rc, 2048);
-	COPY(buf, i, tid, tid_len, 2048);
-	ADD_V(buf, i, 2048);
-	rc = snprintf(buf + i, 2048 - i, "1:y1:re"); INC(i, rc, 2048);
-	return dht_send(D, buf, i, 0, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
+	b_element out, *r;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"r", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "r", &r);
+	b_insert(r, "id", D->myid, IDLEN);
+	if (nodes_len > 0)
+		b_insert(r, "nodes", (unsigned char*)nodes, nodes_len);
+	if (nodes6_len > 0)
+		b_insert(r, "nodes6", (unsigned char*)nodes6, nodes6_len);
+	if (token_len > 0)
+		b_insert(r, "token", (unsigned char*)token, token_len);
+	if (sp)
+		b_insert(r, "value", (unsigned char*)&sp->buf[0], sp->buf.size());
+	b_package(&out, so);
+	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
 }
 
 int
@@ -1792,28 +1760,22 @@ send_find_node(pdht D, const struct sockaddr *sa, int salen,
 const unsigned char *tid, int tid_len,
 const unsigned char *target, int want, int confirm)
 {
-	char buf[512];
-	int i = 0, rc;
-	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
-	COPY(buf, i, D->myid, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "6:target20:"); INC(i, rc, 512);
-	COPY(buf, i, target, IDLEN, 512);
-	if (want > 0) {
-		rc = snprintf(buf + i, 512 - i, "4:wantl%s%se",
-			(want & WANT4) ? "2:n4" : "",
-			(want & WANT6) ? "2:n6" : "");
-		INC(i, rc, 512);
+	b_element out, *a, *l;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"q", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "q", (unsigned char*)"find_node", 9);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "a", &a);
+	b_insert(a, "id", D->myid, IDLEN);
+	b_insert(a, "target", (unsigned char*)target, IDLEN);
+	if (want > 0){
+		b_insertl(a, "want", &l);
+		b_insert(l, "", (want & WANT4) ? (unsigned char*)"n4" : (unsigned char*)"", (want & WANT4) ? 2 : 0);
+		b_insert(l, "", (want & WANT4) ? (unsigned char*)"n6" : (unsigned char*)"", (want & WANT6) ? 2 : 0);
 	}
-	rc = snprintf(buf + i, 512 - i, "e1:q9:find_node1:t%d:", tid_len);
-	INC(i, rc, 512);
-	COPY(buf, i, tid, tid_len, 512);
-	ADD_V(buf, i, 512);
-	rc = snprintf(buf + i, 512 - i, "1:y1:qe"); INC(i, rc, 512);
-	return dht_send(D, buf, i, confirm ? MSG_CONFIRM : 0, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
+	b_package(&out, so);
+	return dht_send(D, so.c_str(), so.size(), confirm ? MSG_CONFIRM : 0, sa, salen);
 }
 
 static int
@@ -1954,29 +1916,22 @@ send_search(pdht D, const struct sockaddr *sa, int salen,
 unsigned char *tid, int tid_len, unsigned char *infohash,
 int want, int confirm)
 {
-	char buf[512];
-	int i = 0, rc;
-
-	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
-	COPY(buf, i, D->myid, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "9:info_hash20:"); INC(i, rc, 512);
-	COPY(buf, i, infohash, 20, 512);
-	if (want > 0) {
-		rc = snprintf(buf + i, 512 - i, "4:wantl%s%se",
-			(want & WANT4) ? "2:n4" : "",
-			(want & WANT6) ? "2:n6" : "");
-		INC(i, rc, 512);
+	b_element out, *a, *l;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"q", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "q", (unsigned char*)"search", 9);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "a", &a);
+	b_insert(a, "id", D->myid, IDLEN);
+	b_insert(a, "info_hash", (unsigned char*)infohash, IDLEN);
+	if (want > 0){
+		b_insertl(a, "want", &l);
+		b_insert(l, "", (want & WANT4) ? (unsigned char*)"n4" : (unsigned char*)"", (want & WANT4) ? 2 : 0);
+		b_insert(l, "", (want & WANT4) ? (unsigned char*)"n6" : (unsigned char*)"", (want & WANT6) ? 2 : 0);
 	}
-	rc = snprintf(buf + i, 512 - i, "e1:q6:search1:t%d:", tid_len);
-	INC(i, rc, 512);
-	COPY(buf, i, tid, tid_len, 512);
-	ADD_V(buf, i, 512);
-	rc = snprintf(buf + i, 512 - i, "1:y1:qe"); INC(i, rc, 512);
-	return dht_send(D, buf, i, confirm ? MSG_CONFIRM : 0, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
+	b_package(&out, so);
+	return dht_send(D, so.c_str(), so.size(), confirm ? MSG_CONFIRM : 0, sa, salen);
 }
 
 int
@@ -1985,43 +1940,36 @@ const struct sockaddr *sa, int salen,
 unsigned char *tid, int tid_len, unsigned char *infohash,
 int want, int confirm, int sequence)
 {
-	char buf[512];
-	int i = 0, rc;
-
-	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
-	COPY(buf, i, D->myid, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "9:info_hash20:"); INC(i, rc, 512);
-	COPY(buf, i, infohash, 20, 512);
-	if (want > 0) {
-		rc = snprintf(buf + i, 512 - i, "4:wantl%s%se",
-			(want & WANT4) ? "2:n4" : "",
-			(want & WANT6) ? "2:n6" : "");
-		INC(i, rc, 512);
-	}
+	b_element out, *a,*l;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"q", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "q", (unsigned char*)"get_peers", 9);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "a", &a);
+	b_insert(a, "id", D->myid, IDLEN);
+	b_insert(a, "info_hash", (unsigned char*)infohash, IDLEN);
 	if (hsa->sa_family == AF_INET){
+		unsigned char buf[512];
 		sockaddr_in* sd_in = (sockaddr_in*)hsa;
-		rc = snprintf(buf + i, 512 - i, "5:order%d:", 6); INC(i, rc, 512);
-		COPY(buf, i, &sd_in->sin_addr, 4, 512);
-		COPY(buf, i, &sd_in->sin_port, 2, 512);
-	}
-	else{
+		memcpy(buf, &sd_in->sin_addr, 16);
+		memcpy(buf + 4, &sd_in->sin_port, 2);
+		b_insert(a, "order", buf, 6);
+	}else{
+		unsigned char buf[512];
 		sockaddr_in6* sd_in = (sockaddr_in6*)hsa;
-		rc = snprintf(buf + i, 512 - i, "5:order%d:", 18); INC(i, rc, 512);
-		COPY(buf, i, &sd_in->sin6_addr, 16, 512);
-		COPY(buf, i, &sd_in->sin6_port, 2, 512);
+		memcpy(buf, &sd_in->sin6_addr, 4);
+		memcpy(buf + 16, &sd_in->sin6_port, 2);
+		b_insert(a, "order", buf, 6);
 	}
-	rc = snprintf(buf + i, 512 - i, "8:sequence%d:", sizeof(int)); INC(i, rc, 512);
-	COPY(buf, i, &sequence, sizeof(int), 512);
-	rc = snprintf(buf + i, 512 - i, "e1:q9:get_peers1:t%d:", tid_len);
-	INC(i, rc, 512);
-	COPY(buf, i, tid, tid_len, 512);
-	ADD_V(buf, i, 512);
-	rc = snprintf(buf + i, 512 - i, "1:y1:qe"); INC(i, rc, 512);
-	return dht_send(D, buf, i, confirm ? MSG_CONFIRM : 0, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
+	if (want > 0){
+		b_insertl(a, "want", &l);
+		b_insert(l, "", (want & WANT4) ? (unsigned char*)"n4" : (unsigned char*)"", (want & WANT4) ? 2 : 0);
+		b_insert(l, "", (want & WANT4) ? (unsigned char*)"n6" : (unsigned char*)"", (want & WANT6) ? 2 : 0);
+	}
+	b_insert(a, "sequence", (unsigned char*)&sequence, sizeof(int));
+	b_package(&out, so);
+	return dht_send(D, so.c_str(), so.size(), confirm ? MSG_CONFIRM : 0, sa, salen);
 }
 
 static int
@@ -2031,65 +1979,48 @@ unsigned char *info_hash, int info_hash_len,
 unsigned char *value, int value_len,
 unsigned char *token, int token_len, int confirm, int sequence)
 {
-	char buf[512];
-	int i = 0, rc;
-
-	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
-	COPY(buf, i, D->myid, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "9:info_hash20:"); INC(i, rc, 512);
-	COPY(buf, i, info_hash, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "5:value%d:", value_len); INC(i, rc, 512);
-	COPY(buf, i, value, value_len, 512);
-	rc = snprintf(buf + i, 512 - i, "5:token%d:", token_len);
-	INC(i, rc, 512);
-	COPY(buf, i, token, token_len, 512);
+	b_element out, *a;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"q", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "q", (unsigned char*)"announce_peer", 13);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "a", &a);
+	b_insert(a, "id", D->myid, IDLEN);
+	b_insert(a, "info_hash", (unsigned char*)info_hash, IDLEN);
 	if (hsa->sa_family == AF_INET){
+		unsigned char buf[512];
 		sockaddr_in* sd_in = (sockaddr_in*)hsa;
-		rc = snprintf(buf + i, 512 - i, "5:order%d:", 6); INC(i, rc, 512);
-		COPY(buf, i, &sd_in->sin_addr, 4, 512);
-		COPY(buf, i, &sd_in->sin_port, 2, 512);
-	}
-	else{
+		memcpy(buf, &sd_in->sin_addr, 4);
+		memcpy(buf + 4, &sd_in->sin_port, 2);
+		b_insert(a, "order", buf, 6);
+	}else{
+		unsigned char buf[512];
 		sockaddr_in6* sd_in = (sockaddr_in6*)hsa;
-		rc = snprintf(buf + i, 512 - i, "5:order%d:", 18); INC(i, rc, 512);
-		COPY(buf, i, &sd_in->sin6_addr, 16, 512);
-		COPY(buf, i, &sd_in->sin6_port, 2, 512);
+		memcpy(buf, &sd_in->sin6_addr, 16);
+		memcpy(buf + 16, &sd_in->sin6_port, 2);
+		b_insert(a, "order", buf, 18);
 	}
-	rc = snprintf(buf + i, 512 - i, "8:sequence%d:", sizeof(int)); INC(i, rc, 512);
-	COPY(buf, i, &sequence, sizeof(int), 512);
-
-	rc = snprintf(buf + i, 512 - i, "e1:q13:announce_peer1:t%d:", tid_len);
-	INC(i, rc, 512);
-	COPY(buf, i, tid, tid_len, 512);
-	ADD_V(buf, i, 512);
-	rc = snprintf(buf + i, 512 - i, "1:y1:qe"); INC(i, rc, 512);
-
-	return dht_send(D, buf, i, confirm ? 0 : MSG_CONFIRM, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
+	b_insert(a, "value", (unsigned char*)value, value_len);
+	b_insert(a, "token", (unsigned char*)token, token_len);
+	b_insert(a, "sequence", (unsigned char*)&sequence, sizeof(int));
+	b_package(&out, so);
+	return dht_send(D, so.c_str(), so.size(), confirm ? 0 : MSG_CONFIRM, sa, salen);
 }
 
 static int
 send_peer_announced(pdht D, const struct sockaddr *sa, int salen,
 unsigned char *tid, int tid_len)
 {
-	char buf[512];
-	int i = 0, rc;
-
-	rc = snprintf(buf + i, 512 - i, "d1:rd2:id20:"); INC(i, rc, 512);
-	COPY(buf, i, D->myid, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "e1:t%d:", tid_len);
-	INC(i, rc, 512);
-	COPY(buf, i, tid, tid_len, 512);
-	ADD_V(buf, i, 512);
-	rc = snprintf(buf + i, 512 - i, "1:y1:re"); INC(i, rc, 512);
-	return dht_send(D, buf, i, 0, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
+	b_element out, *r;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"r", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "r", &r);
+	b_insert(r, "id", D->myid, IDLEN);
+	b_package(&out, so);
+	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
 }
 
 static int
@@ -2097,22 +2028,17 @@ send_error(pdht D, const struct sockaddr *sa, int salen,
 unsigned char *tid, int tid_len,
 int code, const char *message)
 {
-	char buf[512];
-	int i = 0, rc, message_len;
-
-	message_len = strlen(message);
-	rc = snprintf(buf + i, 512 - i, "d1:eli%de%d:", code, message_len);
-	INC(i, rc, 512);
-	COPY(buf, i, message, message_len, 512);
-	rc = snprintf(buf + i, 512 - i, "e1:t%d:", tid_len); INC(i, rc, 512);
-	COPY(buf, i, tid, tid_len, 512);
-	ADD_V(buf, i, 512);
-	rc = snprintf(buf + i, 512 - i, "1:y1:ee"); INC(i, rc, 512);
-	return dht_send(D, buf, i, 0, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
+	int message_len = strlen(message);
+	b_element out, *e;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"e", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertl(&out, "e", &e);
+	b_insert(e, "", (unsigned char*)&code, sizeof(int));
+	b_insert(e, "", (unsigned char*)message, message_len);
+	b_package(&out, so);
+	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
 }
 
 static void
@@ -2730,7 +2656,7 @@ const struct sockaddr *from, int fromlen
 			///选择一个最近的临近节点将消息转发给他
 			node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 			///It is necessary to send 3 times continuously to detect the non arrival rate
-			if (isequence < MAXANNOUNCE && n){
+			if (++isequence < MAXANNOUNCE && n){
 				unsigned short port=0;
 				if (n->ss.ss_family == AF_INET ){
 					sockaddr_in* si = (sockaddr_in*)&n->ss;

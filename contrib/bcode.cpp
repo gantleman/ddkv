@@ -229,6 +229,7 @@ void b_insertd(b_element* e, const char* key, b_element** o)
 
 int b_insert(b_element* e, const char* key, unsigned char* i, int len)
 {
+	if (!len) return 0;
 	if (1 == e->type){
 		std::map<std::string, b_element>* p;
 		memcpy(&p, &e->buf[0], sizeof(void*));
@@ -354,6 +355,7 @@ void b_packagem(b_element* e, std::string& o)
 				ss << ":";
 				o.append(ss.str());
 				o.append(&iter->second.buf[0], iter->second.buf.size());
+
 			}
 		}
 		o.append("e");
