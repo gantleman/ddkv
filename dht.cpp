@@ -296,6 +296,7 @@ typedef struct _dht
 	unsigned char myid[IDLEN];
 	int have_v;
 	unsigned char my_v[9];
+	unsigned char v[4];
 	unsigned char secret[8];
 	unsigned char oldsecret[8];
 
@@ -1353,6 +1354,7 @@ struct sockaddr_in &sin, struct sockaddr_in6 &sin6)
 	if (v) {
 		memcpy(D->my_v, "1:v4:", 5);
 		memcpy(D->my_v + 5, v, 4);
+		memcpy(D->v, v, 4);
 		D->have_v = 1;
 	}
 	else {
@@ -1710,39 +1712,31 @@ int
 send_ping(pdht D, const struct sockaddr *sa, int salen,
 const unsigned char *tid, int tid_len)
 {
-	char buf[512];
-	int i = 0, rc;
-	rc = snprintf(buf + i, 512 - i, "d1:ad2:id20:"); INC(i, rc, 512);
-	COPY(buf, i, D->myid, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "e1:q4:ping1:t%d:", tid_len);
-	INC(i, rc, 512);
-	COPY(buf, i, tid, tid_len, 512);
-	ADD_V(buf, i, 512);
-	rc = snprintf(buf + i, 512 - i, "1:y1:qe"); INC(i, rc, 512);
-	return dht_send(D, buf, i, 0, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
+	b_element out, *a;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"q", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "q", (unsigned char*)"ping", 4);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "a", &a);
+	b_insert(a, "id", D->myid, IDLEN);
+	b_package(&out, so);
+	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
 }
 
 int
 send_pong(pdht D, const struct sockaddr *sa, int salen,
 const unsigned char *tid, int tid_len)
 {
-	char buf[512];
-	int i = 0, rc;
-	rc = snprintf(buf + i, 512 - i, "d1:rd2:id20:"); INC(i, rc, 512);
-	COPY(buf, i, D->myid, IDLEN, 512);
-	rc = snprintf(buf + i, 512 - i, "e1:t%d:", tid_len); INC(i, rc, 512);
-	COPY(buf, i, tid, tid_len, 512);
-	ADD_V(buf, i, 512);
-	rc = snprintf(buf + i, 512 - i, "1:y1:re"); INC(i, rc, 512);
-	return dht_send(D, buf, i, 0, sa, salen);
-
-fail:
-	errno = ENOSPC;
-	return -1;
+	b_element out, *r;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"r", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "r", &r);
+	b_insert(r, "id", D->myid, IDLEN);
+	b_package(&out, so);
+	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
 }
 
 int

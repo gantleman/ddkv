@@ -56,6 +56,7 @@ void b_parsed(const char* buf, int len, int &cur, b_element& out)
 				///复制数据到缓冲区
 				(*p)[key].buf.resize(nlen);
 				memcpy(&(*p)[key].buf[0], (buf + cur), nlen);
+				(*p)[key].key = key;
 				kv = 0;	
 				key.clear();
 			}
@@ -73,6 +74,7 @@ void b_parsed(const char* buf, int len, int &cur, b_element& out)
 					///复制数据到缓冲区
 					(*p)[key].buf.resize(nlen);
 					memcpy(&(*p)[key].buf[0], (buf + begin), nlen);
+					(*p)[key].key = key;
 					kv = 0;
 					key.clear();
 					break;
@@ -120,7 +122,7 @@ void b_parsel(const char* buf, int len, int &cur, b_element& out)
 			b_element t;
 			(*p).push_back(t);
 			
-			(*p).back().iter = --(*p).end();
+			(*p).back().iterl = --(*p).end();
 			(*p).back().buf.resize(nlen);
 			memcpy(&(*p).back().buf[0], (buf + cur), nlen);
 
@@ -138,7 +140,7 @@ void b_parsel(const char* buf, int len, int &cur, b_element& out)
 					b_element t;
 					(*p).push_back(t);
 
-					(*p).back().iter = --(*p).end();
+					(*p).back().iterl = --(*p).end();
 					(*p).back().type = 3;
 					(*p).back().buf.resize(nlen);
 					memcpy(&(*p).back().buf[0], (buf + begin), nlen);
@@ -215,6 +217,12 @@ void b_insertd(b_element* e, const char* key, b_element** o)
 			(*o)->buf.resize(sizeof(void*));
 			memcpy(&(*o)->buf[0], &np, sizeof(void*));
 		}
+	}else if(0 == e->type){
+		std::map<std::string, b_element>* np = new std::map<std::string, b_element>;
+		e->buf.resize(sizeof(void*));
+		e->type = 1;
+		memcpy(&e->buf[0], &np, sizeof(void*));
+		b_insertd(e, key, o);
 	}
 	return;
 }
@@ -229,6 +237,7 @@ int b_insert(b_element* e, const char* key, unsigned char* i, int len)
 		if (iter == p->end()){
 			(*p)[key].buf.resize(len);
 			memcpy(&(*p)[key].buf[0], i, len);
+			(*p)[key].key = key;
 			return 1;
 		}
 	}else if (2 == e->type){
@@ -238,10 +247,16 @@ int b_insert(b_element* e, const char* key, unsigned char* i, int len)
 		b_element t;
 		(*p).push_back(t);
 
-		(*p).back().iter = --(*p).end();
+		(*p).back().iterl = --(*p).end();
 		(*p).back().buf.resize(len);
 		memcpy(&(*p).back().buf[0], i, len);
 		return 1;
+	}else{
+		std::map<std::string, b_element>* np = new std::map<std::string, b_element>;
+		e->buf.resize(sizeof(void*));
+		e->type = 1;
+		memcpy(&e->buf[0], &np, sizeof(void*));
+		b_insert(e, key, i, len);
 	}
 	return 0;
 }
@@ -255,13 +270,19 @@ void b_insertl(b_element* e, const char* key, b_element** o)
 
 		std::map<std::string, b_element>::iterator iter = p->find(key);
 		if (iter == p->end()){
-			(*p)[key].type = 1;
+			(*p)[key].type = 2;
 			*o = &(*p)[key];
 
 			std::list<b_element>* np = new std::list<b_element>;
 			(*o)->buf.resize(sizeof(void*));
 			memcpy(&(*o)->buf[0], &np, sizeof(void*));
 		}
+	}else if (0 == e->type){
+		std::map<std::string, b_element>* np = new std::map<std::string, b_element>;
+		e->buf.resize(sizeof(void*));
+		e->type = 1;
+		memcpy(&e->buf[0], &np, sizeof(void*));
+		b_insertd(e, key, o);
 	}
 	return;
 }
@@ -285,8 +306,7 @@ void b_dell(b_element* e, b_element* i)
 	if (2 == e->type){
 		std::list<b_element>* p;
 		memcpy(&p, &e->buf[0], sizeof(void*));
-		std::list<b_element>::iterator iter = i->iter;
-
+		std::list<b_element>::iterator iter = i->iterl;
 		p->erase(iter);
 	}
 }
@@ -422,10 +442,19 @@ void b_get(b_element* e, int cur, b_element** o)
 
 void b_next(b_element* e, b_element** o)
 {
-	if (2 == e->type){
+	if (1 == e->type){
+		std::map<std::string, b_element>* p;
+		memcpy(&p, &e->buf[0], sizeof(void*));
+		std::map<std::string, b_element>::iterator iter = p->find((*o)->key);
+
+		if (++iter != p->end()){
+			*o = &iter->second;
+			return;
+		}
+	}else if (2 == e->type){
 		std::list<b_element>* p;
 		memcpy(&p, &e->buf[0], sizeof(void*));
-		std::list<b_element>::iterator iter = (*o)->iter;
+		std::list<b_element>::iterator iter = (*o)->iterl;
 
 		if (++iter != p->end()){
 			*o = &(*iter);
