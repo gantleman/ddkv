@@ -29,6 +29,8 @@ THE SOFTWARE.
 #include <string.h>
 #include <fcntl.h>
 #include <string>
+#include "md5.h"
+#include "sha1.h"
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -39,18 +41,15 @@ THE SOFTWARE.
 #include <netdb.h>
 #include <sys/signal.h>
 #include <getopt.h>
-#define MY_FILE int
+
 #else
 #include <ws2tcpip.h>
 #include <time.h>
 #include <windows.h>
 #pragma comment(lib,"ws2_32.lib")
 #include "getopt.h"
-#include "md5.h"
-#include "sha1.h"
 #define sleep Sleep
 #define  random rand
-#define MY_FILE FILE*
 #endif
 
 #include "whiteboard.h"
@@ -174,7 +173,7 @@ static char buf[4096];
 
 int main(int argc, char **argv)
 {
-	MY_FILE fd;
+	FILE* fd;
     int i, rc;
     int s = -1, s6 = -1, port;
     int have_id = 0;
@@ -521,7 +520,7 @@ dht_blacklisted(const struct sockaddr *sa, int salen)
 
 /* We need to provide a reasonably strong cryptographic hashing function.
    Here's how we'd do it if we had RSA's MD5 code. */
-#ifdef _WIN32
+
 void
 dht_hash(void *hash_return, int hash_size,
          void *v1, int len1,
@@ -539,30 +538,6 @@ dht_hash(void *hash_return, int hash_size,
         memset((char*)hash_return + 16, 0, hash_size - 16);
     memcpy(hash_return, ctx.buffer, hash_size > 16 ? 16 : hash_size);
 }
-#else
-/* But for this example, we might as well use something weaker. */
-void
-dht_hash(void *hash_return, int hash_size,
-         const void *v1, int len1,
-         const void *v2, int len2,
-         const void *v3, int len3)
-{
-    const char *c1 = v1, *c2 = v2, *c3 = v3;
-    char key[9];                /* crypt is limited to 8 characters */
-    int i;
-
-    memset(key, 0, 9);
-#define CRYPT_HAPPY(c) ((c % 0x60) + 0x20)
-
-    for(i = 0; i < 2 && i < len1; i++)
-        key[i] = CRYPT_HAPPY(c1[i]);
-    for(i = 0; i < 4 && i < len1; i++)
-        key[2 + i] = CRYPT_HAPPY(c2[i]);
-    for(i = 0; i < 2 && i < len1; i++)
-        key[6 + i] = CRYPT_HAPPY(c3[i]);
-    strncpy(hash_return, crypt(key, "jc"), hash_size);
-}
-#endif
 
 int
 dht_random_bytes(void *buf, size_t size)

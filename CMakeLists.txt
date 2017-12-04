@@ -27,6 +27,18 @@ INCLUDE_DIRECTORIES(${INC_LIST})
 ADD_EXECUTABLE(control ${CT_SRC_LIST})
 ADD_EXECUTABLE(server ${SRC_LIST})
 
+if(CMAKE_COMPILER_IS_GNUCXX)
+	list( APPEND CMAKE_CXX_FLAGS "-std=c++0x -D_FORCE_INLINES ${CMAKE_CXX_FLAGS} -g -ftest-coverage -fprofile-arcs")
+	find_package(Threads REQUIRED)
+	if(THREADS_HAVE_PTHREAD_ARG)
+	target_compile_options(server PUBLIC "-pthread -lsqlite3")
+	endif()
+	
+	if(CMAKE_THREAD_LIBS_INIT)
+	target_link_libraries(server "${CMAKE_THREAD_LIBS_INIT} -ldl")
+	endif()
+endif()
+
 add_custom_command(TARGET server POST_BUILD
                    COMMAND ${CMAKE_COMMAND} -E copy_directory
                    ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:server>)

@@ -4,6 +4,7 @@
 #include <vector>
 #include <sstream>
 #include <list>
+#include <memory.h>
 
 class b_element
 {

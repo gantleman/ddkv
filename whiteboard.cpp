@@ -379,7 +379,7 @@ static node* neighbourhoodup(pdht D, const unsigned char *id,
 	std::map<std::vector<unsigned char>, node> *r);
 
 #ifdef __GNUC__
-__attribute__ ((format (printf, 1, 2)))
+__attribute__ ((format (printf, 2, 3)))
 #endif
 static void
 debugf(pdht D, const char *format, ...)
@@ -491,7 +491,7 @@ static int
 common_bits(const unsigned char *id1, const unsigned char *id2)
 {
 	int i, j;
-	unsigned char xor;
+	unsigned char x;
 	for (i = 0; i < IDLEN; i++) {
 		if (id1[i] != id2[i])
 			break;
@@ -500,11 +500,11 @@ common_bits(const unsigned char *id1, const unsigned char *id2)
 	if (i == IDLEN)
 		return 160;
 
-	xor = id1[i] ^ id2[i];
+	x = id1[i] ^ id2[i];
 
 	j = 0;
-	while ((xor & 0x80) == 0) {
-		xor <<= 1;
+	while ((x & 0x80) == 0) {
+		x <<= 1;
 		j++;
 	}
 
@@ -703,7 +703,7 @@ expire_buckets(pdht D, std::map<std::vector<unsigned char>, node> *routetable)
 	for (; iter != routetable->end();){
 		if (iter->second.pinged >= 3 && D->now.tv_sec - iter->second.pinged_time > 2){
 			iter = routetable->erase(iter);
-			//TODO ·¢ËÍµôÏß¹ã²¥
+			//TODO ï¿½ï¿½ï¿½Íµï¿½ï¿½ß¹ã²¥
 		}
 		else if (iter->second.pinged >= 3){
 			nr = 1;
@@ -1424,7 +1424,7 @@ token_bucket(pdht D)
 	return 1;
 }
 
-///ÒªÕûÀíµ±Ç°myidÒ»¶¨·¶Î§ÄÚµÄÄ¿Ç°ÏÈËæ»ú
+///Òªï¿½ï¿½ï¿½ï¿½Ç°myidÒ»ï¿½ï¿½ï¿½ï¿½Î§ï¿½Úµï¿½Ä¿Ç°ï¿½ï¿½ï¿½ï¿½ï¿½
 ///The current K barrels, a barrel of K, or near the node of a barrel of K search
 static int
 neighbourhood_maintenance(pdht D, int af)
@@ -2653,7 +2653,7 @@ const struct sockaddr *from, int fromlen
 			debugf(D, "Sending peer announced.\n");
 			send_peer_announced(D, to, to_len, tid, tid_len);
 
-			///Ñ¡ÔñÒ»¸ö×î½üµÄÁÙ½ü½Úµã½«ÏûÏ¢×ª·¢¸øËû
+			///Ñ¡ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ù½ï¿½ï¿½Úµã½«ï¿½ï¿½Ï¢×ªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 			///It is necessary to send 3 times continuously to detect the non arrival rate
 			if (++isequence < MAXANNOUNCE && n){

@@ -1,4 +1,5 @@
 #include "bcode.h"
+using namespace std;
 
 b_element::~b_element()
 {
@@ -33,15 +34,15 @@ void b_parsed(const char* buf, int len, int &cur, b_element& out)
 			break;
 		
 		if (buf[cur] == 'd'){
-			///ÌøÈëÇ¶Ì×			
+			///ï¿½ï¿½ï¿½ï¿½Ç¶ï¿½ï¿½			
 			b_parsed(buf, len, cur, (*p)[key]);
 			kv = 0;
 			key.clear();
 		}else if (buf[cur] == 'e'){
-			///Ìø³öÇ¶Ì×
+			///ï¿½ï¿½ï¿½ï¿½Ç¶ï¿½ï¿½
 			return;
 		}else if (buf[cur] == 'l'){
-			///ÌøÈëÇ¶Ì×			
+			///ï¿½ï¿½ï¿½ï¿½Ç¶ï¿½ï¿½			
 			b_parsel(buf, len, cur, (*p)[key]);
 			kv = 0;
 			key.clear();
@@ -53,7 +54,7 @@ void b_parsed(const char* buf, int len, int &cur, b_element& out)
 				key.append((buf + cur), nlen);
 				kv = 1;	
 			}else{
-				///¸´ÖÆÊý¾Ýµ½»º³åÇø
+				///ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ýµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 				(*p)[key].buf.resize(nlen);
 				memcpy(&(*p)[key].buf[0], (buf + cur), nlen);
 				(*p)[key].key = key;
@@ -71,7 +72,7 @@ void b_parsed(const char* buf, int len, int &cur, b_element& out)
 
 				if (buf[begin + ++nlen] == 'e'){
 					(*p)[key].type = 3;
-					///¸´ÖÆÊý¾Ýµ½»º³åÇø
+					///ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ýµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 					(*p)[key].buf.resize(nlen);
 					memcpy(&(*p)[key].buf[0], (buf + begin), nlen);
 					(*p)[key].key = key;
@@ -103,22 +104,22 @@ void b_parsel(const char* buf, int len, int &cur, b_element& out)
 		if (cur++ >= len)
 			break;
 		if (buf[cur] == 'd'){
-			///ÌøÈëÇ¶Ì×
+			///ï¿½ï¿½ï¿½ï¿½Ç¶ï¿½ï¿½
 			b_parsed(buf, len, cur, (*p).back());
 		}else if (buf[cur] == 'e'){
-			///Ìø³öÇ¶Ì×
+			///ï¿½ï¿½ï¿½ï¿½Ç¶ï¿½ï¿½
 			return;
 		}else if (buf[cur] == 'l'){
-			///ÌøÈëÇ¶Ì×			
+			///ï¿½ï¿½ï¿½ï¿½Ç¶ï¿½ï¿½			
 			b_parsel(buf, len, cur, (*p).back());
 		}
 		else if (buf[cur] == ':'){
-			///¸´ÖÆÊý¾Ýµ½»º³åÇø
+			///ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ýµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			int nlen;
 			cur++;
 			nlen = atoi(slen.c_str());
 
-			///²åÈë¿ÕÖµ
+			///ï¿½ï¿½ï¿½ï¿½ï¿½Öµ
 			b_element t;
 			(*p).push_back(t);
 			
@@ -136,7 +137,7 @@ void b_parsel(const char* buf, int len, int &cur, b_element& out)
 					return;
 
 				if (buf[begin + ++nlen] == 'e'){
-					///²åÈë¿ÕÖµ
+					///ï¿½ï¿½ï¿½ï¿½ï¿½Öµ
 					b_element t;
 					(*p).push_back(t);
 
