@@ -58,7 +58,7 @@ THE SOFTWARE.
 #include <windows.h>
 #endif
 #include "bcode.h"
-#include "dht.h"
+#include "whiteboard.h"
 
 #ifndef HAVE_MEMMEM
 #ifdef __GLIBC__

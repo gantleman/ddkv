@@ -38,6 +38,7 @@ THE SOFTWARE.
 #include <sys/socket.h>
 #include <netdb.h>
 #include <sys/signal.h>
+#include <getopt.h>
 #define MY_FILE int
 #else
 #include <ws2tcpip.h>
@@ -52,7 +53,7 @@ THE SOFTWARE.
 #define MY_FILE FILE*
 #endif
 
-#include "dht.h"
+#include "whiteboard.h"
 
 #define CCMD "[control]"
 #define SCCMD  sizeof(CCMD) - 1
