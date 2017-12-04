@@ -1673,9 +1673,10 @@ const struct sockaddr *sa, int salen)
 {
 	int s;
 
-	if (salen == 0)
+	if (salen == 0){
+		debugf(D, "error send salen is 0!\n");
 		abort();
-
+	}
 	if (node_blacklisted(D, sa, salen)) {
 		debugf(D, "Attempting to send to blacklisted node.\n");
 		errno = EPERM;
@@ -1690,6 +1691,7 @@ const struct sockaddr *sa, int salen)
 		s = -1;
 
 	if (s < 0) {
+		debugf(D, "EAFNOSUPPORT\n");
 		errno = EAFNOSUPPORT;
 		return -1;
 	}
