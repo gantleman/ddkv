@@ -1639,9 +1639,7 @@ int
 dht_ping_node(DHT iD, const struct sockaddr *sa, int salen)
 {
 	pdht D = (pdht)iD;
-
 	unsigned char tid[4];
-
 	debugf(D, "Sending ping.\n");
 	make_tid(tid, "pn", 0);
 	return send_ping(D, sa, salen, tid, 4);

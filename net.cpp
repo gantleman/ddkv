@@ -48,7 +48,7 @@ THE SOFTWARE.
 #include <windows.h>
 #pragma comment(lib,"ws2_32.lib")
 #include "getopt.h"
-#define sleep Sleep
+#define sleep(d) Sleep(d*1000)
 #define  random rand
 #endif
 
@@ -402,7 +402,7 @@ int main(int argc, char **argv)
     for(i = 0; i < num_bootstrap_nodes; i++) {
 		dht_ping_node(D, (struct sockaddr*)&bootstrap_nodes[i],
                       sizeof(bootstrap_nodes[i]));
-        sleep(random() % 100);
+        sleep(random() % 3);
     }
 
     while(1) {
