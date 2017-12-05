@@ -191,6 +191,7 @@ struct node {
 	time_t reply_time;          /* time of last correct reply received */
 	time_t pinged_time;         /* time of last request */
 	int pinged;                 /* how many requests we sent since last reply */
+	std::set<std::vector<char>> syn_first;/*Sync data for the first landing*/
 };
 
 struct gp_node {
@@ -690,6 +691,40 @@ int confirm)
 		return n;
 	}
 	return 0;
+}
+
+static int
+del_node(pdht D, const unsigned char *id, int af)
+{
+	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
+	std::vector<unsigned char> k, myk;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+	myk.resize(IDLEN);
+	memcpy(&myk[0], D->myid, IDLEN);
+
+	std::map<std::vector<unsigned char>, node>::iterator itercur, iter = r->find(k);
+	itercur = iter;
+	itercur--;
+	int pos = -1;
+	if (iter != r->end()){
+		for(;;)
+		{
+			if (itercur == r->end()){
+				itercur--;
+				continue;
+			}
+			if(++pos >= MAXGETPEER || itercur->first == myk){
+				pos = -1;
+				break;
+			}
+			if(itercur->first == myk){
+				break;
+			}
+		}
+		r->erase(iter);
+	}
+	return pos;
 }
 
 /* Called periodically to purge known-bad nodes.  Note that we're very
@@ -1868,8 +1903,8 @@ static node* neighbourhoodup(pdht D, const unsigned char *id,
 	std::vector<unsigned char> k;
 	k.resize(IDLEN);
 	memcpy(&k[0], id, IDLEN);
-	std::map<std::vector<unsigned char>, node>::iterator iter, iter2 = r->lower_bound(k);
-	iter = --iter2;
+	std::map<std::vector<unsigned char>, node>::iterator iter= r->lower_bound(k);
+	--iter;
 	for (int i = 0; i < int(r->size() + 1); i++){
 		if (iter == r->end()){
 			iter--;
@@ -1879,6 +1914,32 @@ static node* neighbourhoodup(pdht D, const unsigned char *id,
 		if (node_good(D, n)){
 			return n;
 		}
+		iter--;
+	}
+	return 0;
+}
+
+static node* neighbourhooddown(pdht D, const unsigned char *id,
+	std::map<std::vector<unsigned char>, node> *r)
+{
+	if (r->empty())
+		return 0;
+
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+	std::map<std::vector<unsigned char>, node>::iterator iter = r->lower_bound(k);
+	++iter;
+	for (int i = 0; i < int(r->size() + 1); i++){
+		if (iter == r->end()){
+			iter++;
+			continue;
+		}
+		struct node *n = &iter->second;
+		if (node_good(D, n)){
+			return n;
+		}
+		iter++;
 	}
 	return 0;
 }
