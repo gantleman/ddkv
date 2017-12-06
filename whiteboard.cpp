@@ -372,8 +372,6 @@ static int send_error(pdht D, const struct sockaddr *sa, int salen,
 static void process_message(pdht D, const unsigned char *buf, int buflen,
 	const struct sockaddr *from, int fromlen);
 static void expire_gossip(pdht D);
-static void send_gossip(pdht D, unsigned char *gid, 
-	const char* buf, int len);
 static void send_gossip_step(pdht D, unsigned char *gid,
 	const char* buf, int len);
 static node* neighbourhoodup(pdht D, const unsigned char *id,
@@ -1733,6 +1731,101 @@ const struct sockaddr *sa, int salen)
 }
 
 int
+send_nodeup(pdht D)
+{
+	unsigned char tid[4];
+	unsigned char gid[IDLEN];
+	dht_random_bytes(gid, IDLEN);
+
+	make_tid(tid, "np", 0);
+	b_element out, *a;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"q", 1);
+	b_insert(&out, "t", (unsigned char*)tid, 4);
+	b_insert(&out, "q", (unsigned char*)"nodeup", 6);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "a", &a);
+	b_insert(a, "id", D->myid, IDLEN);
+	b_insert(a, "g", (unsigned char*)gid, IDLEN);
+	b_package(&out, so);
+
+	return send_gossip_step(D, gid, so.c_str(), so.size());
+}
+
+int
+send_nodedown(pdht D, const unsigned char * id)
+{
+	unsigned char tid[4];
+	unsigned char gid[IDLEN];
+	dht_random_bytes(gid, IDLEN);
+
+	make_tid(tid, "nd", 0);
+	b_element out, *a;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"q", 1);
+	b_insert(&out, "t", (unsigned char*)tid, 4);
+	b_insert(&out, "q", (unsigned char*)"nodedown", 8);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "a", &a);
+	b_insert(a, "id", D->myid, IDLEN);
+	b_insert(a, "g", (unsigned char*)gid, IDLEN);
+	b_insert(a, "n", (unsigned char*)id, IDLEN);
+	b_package(&out, so);
+
+	return send_gossip_step(D, gid, so.c_str(), so.size());
+}
+
+int
+send_syn(pdht D, const struct sockaddr *sa, int salen,
+unsigned char *infohash,
+unsigned char *value, int value_len)
+{
+	unsigned char tid[4];
+	unsigned char gid[IDLEN];
+	dht_random_bytes(gid, IDLEN);
+
+	make_tid(tid, "sy", 0);
+	b_element out, *a;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"q", 1);
+	b_insert(&out, "t", (unsigned char*)tid, 4);
+	b_insert(&out, "q", (unsigned char*)"syn", 3);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "a", &a);
+	b_insert(a, "id", D->myid, IDLEN);
+	b_insert(a, "info_hash", (unsigned char*)infohash, IDLEN);
+	b_insert(a, "value", value, value_len);
+	b_package(&out, so);
+
+	return return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
+}
+
+int
+send_sync(pdht D, const struct sockaddr *sa, int salen,
+unsigned char *infohash,
+unsigned char *value, int value_len)
+{
+	unsigned char tid[4];
+	unsigned char gid[IDLEN];
+	dht_random_bytes(gid, IDLEN);
+
+	make_tid(tid, "sc", 0);
+	b_element out, *a;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"q", 1);
+	b_insert(&out, "t", (unsigned char*)tid, 4);
+	b_insert(&out, "q", (unsigned char*)"sync", 4);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "a", &a);
+	b_insert(a, "id", D->myid, IDLEN);
+	b_insert(a, "info_hash", (unsigned char*)infohash, IDLEN);
+	b_insert(a, "value", value, value_len);
+	b_package(&out, so);
+
+	return return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
+}
+
+int
 send_ping(pdht D, const struct sockaddr *sa, int salen,
 const unsigned char *tid, int tid_len)
 {
@@ -2125,16 +2218,6 @@ send_gossip_step(pdht D, unsigned char *gid, const char* buf, int len)
 	{
 		dht_send(D, buf, len, 0, (const sockaddr *)&iter6->second.ss, iter6->second.sslen);
 	}
-}
-
-static void
-send_gossip(pdht D, const char* buf, int len)
-{
-	debugf(D, "send gossip.");
-	unsigned char gid[IDLEN];
-	dht_random_bytes(gid, IDLEN);
-	send_gossip_step(D, gid, buf, len);
-
 }
 
 static void
