@@ -191,7 +191,7 @@ struct node {
 	time_t reply_time;          /* time of last correct reply received */
 	time_t pinged_time;         /* time of last request */
 	int pinged;                 /* how many requests we sent since last reply */
-	std::set<std::vector<char>> syn_first;/*Sync data for the first landing*/
+	std::vector<char> syn_key;/*Sync data for the first landing,recode laste key*/
 };
 
 struct gp_node {
@@ -1749,7 +1749,7 @@ send_nodeup(pdht D)
 	b_insert(a, "g", (unsigned char*)gid, IDLEN);
 	b_package(&out, so);
 
-	return send_gossip_step(D, gid, so.c_str(), so.size());
+	send_gossip_step(D, gid, so.c_str(), so.size());
 }
 
 int
@@ -1772,7 +1772,7 @@ send_nodedown(pdht D, const unsigned char * id)
 	b_insert(a, "n", (unsigned char*)id, IDLEN);
 	b_package(&out, so);
 
-	return send_gossip_step(D, gid, so.c_str(), so.size());
+	send_gossip_step(D, gid, so.c_str(), so.size());
 }
 
 int
@@ -1797,7 +1797,7 @@ unsigned char *value, int value_len)
 	b_insert(a, "value", value, value_len);
 	b_package(&out, so);
 
-	return return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
+	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
 }
 
 int
@@ -1822,7 +1822,7 @@ unsigned char *value, int value_len)
 	b_insert(a, "value", value, value_len);
 	b_package(&out, so);
 
-	return return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
+	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
 }
 
 int
