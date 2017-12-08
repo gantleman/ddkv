@@ -192,6 +192,7 @@ struct node {
 	time_t pinged_time;         /* time of last request */
 	int pinged;                 /* how many requests we sent since last reply */
 	std::vector<char> syn_key;/*Sync data for the first landing,recode laste key*/
+	time_t syn_time;/*last sync tiem*/
 };
 
 struct gp_node {
