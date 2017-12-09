@@ -191,7 +191,7 @@ struct node {
 	time_t reply_time;          /* time of last correct reply received */
 	time_t pinged_time;         /* time of last request */
 	int pinged;                 /* how many requests we sent since last reply */
-	std::vector<char> syn_key;/*Sync data for the first landing,recode laste key*/
+	std::vector<unsigned char> syn_key;/*Sync data for the first landing,recode laste key*/
 	time_t syn_time;/*last sync tiem*/
 };
 
@@ -377,6 +377,9 @@ static void send_gossip_step(pdht D, unsigned char *gid,
 	const char* buf, int len);
 static node* neighbourhoodup(pdht D, const unsigned char *id,
 	std::map<std::vector<unsigned char>, node> *r);
+static peer*
+	enum_storage(pdht D, const unsigned char *mid,
+	const unsigned char *up, const unsigned char *down, unsigned char *info_id, const unsigned char** outkey);
 
 #ifdef __GNUC__
 __attribute__ ((format (printf, 2, 3)))
@@ -1105,6 +1108,25 @@ dht_callback *callback, void *closure, const char* buf, int len)
 	search_step(D, sr);
 	D->search_time = D->now.tv_sec;
 	return sr->tid;
+}
+
+static peer*
+enum_storage(pdht D, const unsigned char *mid, const unsigned char *up, const unsigned char *down, unsigned char *info_id,
+const unsigned char** outkey)
+{
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], info_id, IDLEN);
+	std::map<std::vector<unsigned char>, peer>::iterator iter = D->storage.upper_bound(k);
+	for (; iter!=D->storage.end(); iter++)
+	{
+		if (xorcmp(mid, up, &iter->first[0]) < 0 && xorcmp(mid, down, &iter->first[0]) < 0) {
+			*outkey = &iter->first[0];
+			return &iter->second;
+		}
+	}
+
+	return 0;
 }
 
 /* A struct storage stores all the stored peer addresses for a given info
@@ -2483,8 +2505,20 @@ const struct sockaddr *from, int fromlen
 				sr->gpnode.push_back(n);
 			}
 		} else if (tid_match(tid, "sc", &ttid)) {
-			///return sync
-
+			node * mid = find_node(D, id, from->sa_family);
+			if (mid && mid->syn_key.empty())
+				goto dontread;
+			///return sync		
+			node * up = neighbourhoodup(D, mid->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+			node * down = neighbourhooddown(D, mid->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+			const unsigned char* key;
+			peer* p = enum_storage(D, mid->id, up->id, down->id, (unsigned char*)&mid->syn_key[0], &key);
+			if (0 != p) {
+				send_sync(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
+				mid->syn_key.resize(IDLEN);
+				memcpy(&mid->syn_key[0], key, IDLEN);
+				mid->syn_time = D->now.tv_sec;
+			}
 		} else {
 			debugf(D, "Unexpected reply: ");
 			debug_printable(D, (unsigned char *)buf, buflen);
@@ -2779,11 +2813,27 @@ const struct sockaddr *from, int fromlen
 			} else
 				debugf(D, "at %d not find neighbourhoodup.\n", isequence);
 		} else if (memcmp(q_return, "node_up", q_len) == 0) {
-
+			//检查是否发起syn或sync
+			send_nodeup(D);
 		} else if (memcmp(q_return, "sync", q_len) == 0) {
-
+			//检查是存在如果不存在就写入
+			unsigned char *info_hash;
+			int info_hash_len;
+			b_find(a, "info_hash", &info_hash, info_hash_len);
+			if (info_hash_len == 0)
+				goto dontread;
+			unsigned char* value;
+			int value_len;
+			b_find(a, "value", &value, value_len);
+			if (value_len == 0)
+				goto dontread;
+			peer* p = find_storage(D, info_hash);
+			if (0 == p){
+				storage_store(D, info_hash, (char*)value, value_len);
+			}
+			send_syncr(D, from, fromlen, tid, tid_len);
 		} else if (memcmp(q_return, "syn", q_len) == 0) {
-
+			///把值写入并向后传播
 		} else if (memcmp(q_return, "node_down", q_len) == 0) {
 
 		}
