@@ -218,7 +218,7 @@ struct search_node {
 #define SEARCH_NODES 14
 
 #define MAXGETPEER   1
-#define MAXANNOUNCE  5
+#define MAXANNOUNCE  3
 
 ///Notice that search is used to modify and query the two operations
 struct search {
@@ -1775,7 +1775,8 @@ send_nodedown(pdht D, const unsigned char * id)
 int
 send_syn(pdht D, const struct sockaddr *sa, int salen,
 unsigned char *infohash,
-unsigned char *value, int value_len)
+unsigned char *value, int value_len,
+int sequence)
 {
 	unsigned char tid[4];
 	unsigned char gid[IDLEN];
@@ -1792,6 +1793,7 @@ unsigned char *value, int value_len)
 	b_insert(a, "id", D->myid, IDLEN);
 	b_insert(a, "info_hash", (unsigned char*)infohash, IDLEN);
 	b_insert(a, "value", value, value_len);
+	b_insert(a, "sequence", (unsigned char*)&sequence, sizeof(int));
 	b_package(&out, so);
 
 	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
@@ -2790,7 +2792,7 @@ const struct sockaddr *from, int fromlen
 			debugf(D, "Sending peer announced.\n");
 			send_peer_announced(D, to, to_len, tid, tid_len);
 
-			node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+			node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 			///It is necessary to send 3 times continuously to detect the non arrival rate
 			if (++isequence < MAXANNOUNCE && n) {
 				unsigned short port = 0;
@@ -2833,9 +2835,50 @@ const struct sockaddr *from, int fromlen
 			}
 			send_syncr(D, from, fromlen, tid, tid_len);
 		} else if (memcmp(q_return, "syn", q_len) == 0) {
-			///把值写入并向后传播
-		} else if (memcmp(q_return, "node_down", q_len) == 0) {
+			unsigned char *info_hash;
+			int info_hash_len;
+			b_find(a, "info_hash", &info_hash, info_hash_len);
+			if (info_hash_len == 0)
+				goto dontread;
 
+			unsigned char* value;
+			int value_len;
+			b_find(a, "value", &value, value_len);
+			if (value_len == 0)
+				goto dontread;
+
+			unsigned char* sequence;
+			int sequence_len;
+			b_find(a, "sequence", &sequence, sequence_len);
+			if (sequence_len == 0)
+				goto dontread;
+
+			int isequence = -1;
+			memcpy(&isequence, sequence, sequence_len);
+			if (isequence == -1)
+				goto dontread;
+
+			storage_store(D, info_hash, (char*)value, value_len);
+
+			node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+			///It is necessary to send 3 times continuously to detect the non arrival rate
+			if (++isequence < MAXANNOUNCE && n) {
+				unsigned short port = 0;
+				if (n->ss.ss_family == AF_INET) {
+					sockaddr_in* si = (sockaddr_in*)&n->ss;
+					port = ntohs(si->sin_port);
+				} else {
+					sockaddr_in6* si = (sockaddr_in6*)&n->ss;
+					port = ntohs(si->sin6_port);
+				}
+				debugf(D, "at %d Sending syn port %d.\n", isequence, port);
+				send_syn(D,(struct sockaddr*)&n->ss,
+					n->sslen, info_hash,
+					(unsigned char*)value, value_len, isequence);
+			} else
+				debugf(D, "syn at %d not find neighbourhoodup.\n", isequence);
+		} else if (memcmp(q_return, "node_down", q_len) == 0) {
+			//send_nodedown(D,)
 		}
 
 		if (!token_bucket(D)) {
