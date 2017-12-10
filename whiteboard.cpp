@@ -191,8 +191,10 @@ struct node {
 	time_t reply_time;          /* time of last correct reply received */
 	time_t pinged_time;         /* time of last request */
 	int pinged;                 /* how many requests we sent since last reply */
-	std::vector<unsigned char> syn_key;/*Sync data for the first landing,recode laste key*/
-	time_t syn_time;/*last sync tiem*/
+	std::vector<unsigned char> syn_key;/*Syn data for the first landing,recode laste key*/
+	time_t syn_time;/*last syn tiem*/
+	std::vector<unsigned char> sync_key;/*Sync data for the first landing,recode laste key*/
+	time_t sync_time;/*last sync tiem*/
 };
 
 struct gp_node {
@@ -377,9 +379,6 @@ static void send_gossip_step(pdht D, unsigned char *gid,
 	const char* buf, int len);
 static node* neighbourhoodup(pdht D, const unsigned char *id,
 	std::map<std::vector<unsigned char>, node> *r);
-static peer*
-	enum_storage(pdht D, const unsigned char *mid,
-	const unsigned char *up, const unsigned char *down, unsigned char *info_id, const unsigned char** outkey);
 
 #ifdef __GNUC__
 __attribute__ ((format (printf, 2, 3)))
@@ -1115,9 +1114,16 @@ enum_storage(pdht D, const unsigned char *mid, const unsigned char *up, const un
 const unsigned char** outkey)
 {
 	std::vector<unsigned char> k;
-	k.resize(IDLEN);
-	memcpy(&k[0], info_id, IDLEN);
-	std::map<std::vector<unsigned char>, peer>::iterator iter = D->storage.upper_bound(k);
+	std::map<std::vector<unsigned char>, peer>::iterator iter;
+	if (info_id == 0)
+	{
+		k.resize(IDLEN);
+		memcpy(&k[0], info_id, IDLEN);
+		iter = D->storage.upper_bound(k);
+	} else {
+		iter = D->storage.begin();
+	}	
+
 	for (; iter!=D->storage.end(); iter++)
 	{
 		if (xorcmp(mid, up, &iter->first[0]) < 0 && xorcmp(mid, down, &iter->first[0]) < 0) {
@@ -1128,6 +1134,33 @@ const unsigned char** outkey)
 
 	return 0;
 }
+
+static peer*
+enum_storage(pdht D, unsigned char *info_id,
+const unsigned char** outkey, std::vector<node*> &v)
+{
+	std::vector<unsigned char> k;
+	std::map<std::vector<unsigned char>, peer>::iterator iter;
+	if (info_id == 0) {
+		k.resize(IDLEN);
+		memcpy(&k[0], info_id, IDLEN);
+		iter = D->storage.upper_bound(k);
+	} else {
+		iter = D->storage.begin();
+	}
+
+	for (; iter != D->storage.end(); iter++) {
+		for (int i = 1; i <= MAXANNOUNCE; i++)
+		{
+			if (xorcmp(v[i]->id, v[i - 1]->id, &iter->first[0]) < 0 && xorcmp(v[i]->id, v[i + 1]->id, &iter->first[0]) < 0) {
+				*outkey = &iter->first[0];
+				return &iter->second;
+			}
+		}
+	}
+	return 0;
+}
+
 
 /* A struct storage stores all the stored peer addresses for a given info
    hash. */
@@ -1441,7 +1474,6 @@ dht_uninit(DHT iD)
 }
 
 /* Rate control for requests we receive. */
-
 static int
 token_bucket(pdht D)
 {
@@ -1457,8 +1489,6 @@ token_bucket(pdht D)
 	D->token_bucket_tokens--;
 	return 1;
 }
-
-///Ҫ����ǰmyidһ����Χ�ڵ�Ŀǰ�����
 ///The current K barrels, a barrel of K, or near the node of a barrel of K search
 static int
 neighbourhood_maintenance(pdht D, int af)
@@ -1515,6 +1545,112 @@ bucket_maintenance(pdht D, int af)
 		/* In order to avoid sending queries back-to-back,
 		give up for now and reschedule us soon. */
 		return 1;
+	}
+	return 0;
+}
+
+static node* neighbourhoodup(pdht D, const unsigned char *id,
+	std::map<std::vector<unsigned char>, node> *r)
+{
+	if (r->empty())
+		return 0;
+
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+	std::map<std::vector<unsigned char>, node>::iterator iter = r->lower_bound(k);
+	--iter;
+	for (int i = 0; i < int(r->size() + 1); i++) {
+		if (iter == r->end()) {
+			iter--;
+			continue;
+		}
+		struct node *n = &iter->second;
+		if (node_good(D, n)) {
+			return n;
+		}
+		iter--;
+	}
+	return 0;
+}
+
+static int neighbourhooddown(pdht D, const unsigned char *id,
+	std::map<std::vector<unsigned char>, node> *r, std::vector<node*> &v, int distance)
+{
+	if (r->empty())
+		return 0;
+
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+	std::map<std::vector<unsigned char>, node>::iterator iter = r->lower_bound(k);
+	++iter;
+	int loop = 0;
+	v.resize(distance);
+	for (; loop < distance; loop++) {
+		if (iter == r->end()) {
+			iter++;
+			continue;
+		}
+		struct node *n = &iter->second;
+		if (node_good(D, n)) {
+			loop++;
+			v[loop]=n;
+		}
+		iter++;
+	}
+	return 0;
+}
+
+static node* neighbourhooddown(pdht D, const unsigned char *id,
+	std::map<std::vector<unsigned char>, node> *r)
+{
+	if (r->empty())
+		return 0;
+
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+	std::map<std::vector<unsigned char>, node>::iterator iter = r->lower_bound(k);
+	++iter;
+	for (int i = 0; i < int(r->size() + 1); i++) {
+		if (iter == r->end()) {
+			iter++;
+			continue;
+		}
+		struct node *n = &iter->second;
+		if (node_good(D, n)) {
+			return n;
+		}
+		iter++;
+	}
+	return 0;
+}
+
+static int neighbourhooddown_distance(pdht D, const unsigned char *id,
+	std::map<std::vector<unsigned char>, node> *r, int distance)
+{
+	if (r->empty())
+		return 0;
+
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], D->myid, IDLEN);
+	std::map<std::vector<unsigned char>, node>::iterator iter = r->lower_bound(k);
+	++iter;
+	int loop = 0;
+	for (int i = 0; i < int(r->size() + 1); i++) {
+		if (iter == r->end()) {
+			iter++;
+			continue;
+		} 
+		struct node *n = &iter->second;
+		if (id_cmp(id, n->id) == 0) {
+			return 1;
+		}
+		iter++;
+		if (loop++ > distance)
+			return 0;
 	}
 	return 0;
 }
@@ -1775,8 +1911,7 @@ send_nodedown(pdht D, const unsigned char * id)
 int
 send_syn(pdht D, const struct sockaddr *sa, int salen,
 unsigned char *infohash,
-unsigned char *value, int value_len,
-int sequence)
+unsigned char *value, int value_len)
 {
 	unsigned char tid[4];
 	unsigned char gid[IDLEN];
@@ -1793,9 +1928,23 @@ int sequence)
 	b_insert(a, "id", D->myid, IDLEN);
 	b_insert(a, "info_hash", (unsigned char*)infohash, IDLEN);
 	b_insert(a, "value", value, value_len);
-	b_insert(a, "sequence", (unsigned char*)&sequence, sizeof(int));
 	b_package(&out, so);
 
+	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
+}
+
+int
+send_synr(pdht D, const struct sockaddr *sa, int salen,
+const unsigned char *tid, int tid_len)
+{
+	b_element out, *r;
+	std::string so;
+	b_insert(&out, "y", (unsigned char*)"r", 1);
+	b_insert(&out, "t", (unsigned char*)tid, tid_len);
+	b_insert(&out, "v", D->v, sizeof(D->v));
+	b_insertd(&out, "r", &r);
+	b_insert(r, "id", D->myid, IDLEN);
+	b_package(&out, so);
 	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
 }
 
@@ -1995,56 +2144,6 @@ const unsigned char *id, std::map<std::vector<unsigned char>, node> *r)
 
 	}
 	return numnodes;
-}
-
-static node* neighbourhoodup(pdht D, const unsigned char *id,
-	std::map<std::vector<unsigned char>, node> *r)
-{
-	if (r->empty())
-		return 0;
-
-	std::vector<unsigned char> k;
-	k.resize(IDLEN);
-	memcpy(&k[0], id, IDLEN);
-	std::map<std::vector<unsigned char>, node>::iterator iter = r->lower_bound(k);
-	--iter;
-	for (int i = 0; i < int(r->size() + 1); i++) {
-		if (iter == r->end()) {
-			iter--;
-			continue;
-		}
-		struct node *n = &iter->second;
-		if (node_good(D, n)) {
-			return n;
-		}
-		iter--;
-	}
-	return 0;
-}
-
-static node* neighbourhooddown(pdht D, const unsigned char *id,
-	std::map<std::vector<unsigned char>, node> *r)
-{
-	if (r->empty())
-		return 0;
-
-	std::vector<unsigned char> k;
-	k.resize(IDLEN);
-	memcpy(&k[0], id, IDLEN);
-	std::map<std::vector<unsigned char>, node>::iterator iter = r->lower_bound(k);
-	++iter;
-	for (int i = 0; i < int(r->size() + 1); i++) {
-		if (iter == r->end()) {
-			iter++;
-			continue;
-		}
-		struct node *n = &iter->second;
-		if (node_good(D, n)) {
-			return n;
-		}
-		iter++;
-	}
-	return 0;
 }
 
 int
@@ -2508,20 +2607,37 @@ const struct sockaddr *from, int fromlen
 			}
 		} else if (tid_match(tid, "sc", &ttid)) {
 			node * mid = find_node(D, id, from->sa_family);
-			if (mid && mid->syn_key.empty())
+			if (mid && mid->sync_key.empty())
 				goto dontread;
 			///return sync		
 			node * up = neighbourhoodup(D, mid->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 			node * down = neighbourhooddown(D, mid->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 			const unsigned char* key;
-			peer* p = enum_storage(D, mid->id, up->id, down->id, (unsigned char*)&mid->syn_key[0], &key);
+			peer* p = enum_storage(D, mid->id, up->id, down->id, (unsigned char*)&mid->sync_key[0], &key);
 			if (0 != p) {
 				send_sync(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
-				mid->syn_key.resize(IDLEN);
-				memcpy(&mid->syn_key[0], key, IDLEN);
-				mid->syn_time = D->now.tv_sec;
+				mid->sync_key.resize(IDLEN);
+				memcpy(&mid->sync_key[0], key, IDLEN);
+				mid->sync_time = D->now.tv_sec;
 			}
-		} else {
+		} else if (tid_match(tid, "sy", &ttid)) {
+			node * n = find_node(D, id, from->sa_family);
+			if (n && n->syn_key.empty())
+				goto dontread;
+
+			if (neighbourhooddown_distance(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
+				std::vector<node*> v;
+				neighbourhooddown(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
+				const unsigned char* key;
+				peer* p = enum_storage(D, (unsigned char*)&n->syn_key[0], &key, v);
+				if (0 != p) {
+					send_syn(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
+					n->sync_key.resize(IDLEN);
+					memcpy(&n->syn_key[0], key, IDLEN);
+					n->syn_time = D->now.tv_sec;
+				}
+			}
+		}else {
 			debugf(D, "Unexpected reply: ");
 			debug_printable(D, (unsigned char *)buf, buflen);
 			debugf(D, "\n");
@@ -2815,7 +2931,34 @@ const struct sockaddr *from, int fromlen
 			} else
 				debugf(D, "at %d not find neighbourhoodup.\n", isequence);
 		} else if (memcmp(q_return, "node_up", q_len) == 0) {
-			//检查是否发起syn或sync
+			node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+			if (id_cmp(n->id, id) == 0) {
+				if (neighbourhooddown_distance(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)){
+					std::vector<node*> v;
+					neighbourhooddown(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
+					const unsigned char* key;
+					peer* p = enum_storage(D, 0, &key, v);
+					if (0 != p) {
+						send_syn(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
+						n->sync_key.resize(IDLEN);
+						memcpy(&n->syn_key[0], key, IDLEN);
+						n->syn_time = D->now.tv_sec;
+					}
+				}
+			}
+
+			n = neighbourhooddown(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+			if (id_cmp(n->id, id)==0){
+				node * down = neighbourhooddown(D, n->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+				const unsigned char* key;
+				peer* p = enum_storage(D, id, D->myid, down->id, 0, &key);
+				if (0 != p) {
+					send_sync(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
+					n->sync_key.resize(IDLEN);
+					memcpy(&n->sync_key[0], key, IDLEN);
+					n->sync_time = D->now.tv_sec;
+				}
+			}
 			send_nodeup(D);
 		} else if (memcmp(q_return, "sync", q_len) == 0) {
 			//检查是存在如果不存在就写入
@@ -2824,11 +2967,13 @@ const struct sockaddr *from, int fromlen
 			b_find(a, "info_hash", &info_hash, info_hash_len);
 			if (info_hash_len == 0)
 				goto dontread;
+
 			unsigned char* value;
 			int value_len;
 			b_find(a, "value", &value, value_len);
 			if (value_len == 0)
 				goto dontread;
+			
 			peer* p = find_storage(D, info_hash);
 			if (0 == p){
 				storage_store(D, info_hash, (char*)value, value_len);
@@ -2847,38 +2992,27 @@ const struct sockaddr *from, int fromlen
 			if (value_len == 0)
 				goto dontread;
 
-			unsigned char* sequence;
-			int sequence_len;
-			b_find(a, "sequence", &sequence, sequence_len);
-			if (sequence_len == 0)
-				goto dontread;
-
-			int isequence = -1;
-			memcpy(&isequence, sequence, sequence_len);
-			if (isequence == -1)
-				goto dontread;
-
-			storage_store(D, info_hash, (char*)value, value_len);
-
-			node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-			///It is necessary to send 3 times continuously to detect the non arrival rate
-			if (++isequence < MAXANNOUNCE && n) {
-				unsigned short port = 0;
-				if (n->ss.ss_family == AF_INET) {
-					sockaddr_in* si = (sockaddr_in*)&n->ss;
-					port = ntohs(si->sin_port);
-				} else {
-					sockaddr_in6* si = (sockaddr_in6*)&n->ss;
-					port = ntohs(si->sin6_port);
-				}
-				debugf(D, "at %d Sending syn port %d.\n", isequence, port);
-				send_syn(D,(struct sockaddr*)&n->ss,
-					n->sslen, info_hash,
-					(unsigned char*)value, value_len, isequence);
-			} else
-				debugf(D, "syn at %d not find neighbourhoodup.\n", isequence);
+			peer* p = find_storage(D, info_hash);
+			if (0 == p) {
+				storage_store(D, info_hash, (char*)value, value_len);
+			}
+			send_synr(D, from, fromlen, tid, tid_len);
 		} else if (memcmp(q_return, "node_down", q_len) == 0) {
-			//send_nodedown(D,)
+			node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+			if (id_cmp(n->id, id) == 0) {
+				if (neighbourhooddown_distance(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
+					std::vector<node*> v;
+					neighbourhooddown(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
+					const unsigned char* key;
+					peer* p = enum_storage(D, 0, &key, v);
+					if (0 != p) {
+						send_syn(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
+						n->sync_key.resize(IDLEN);
+						memcpy(&n->syn_key[0], key, IDLEN);
+						n->syn_time = D->now.tv_sec;
+					}
+				}
+			}
 		}
 
 		if (!token_bucket(D)) {
