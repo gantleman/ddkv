@@ -2991,11 +2991,7 @@ const struct sockaddr *from, int fromlen
 			b_find(a, "value", &value, value_len);
 			if (value_len == 0)
 				goto dontread;
-
-			peer* p = find_storage(D, info_hash);
-			if (0 == p) {
-				storage_store(D, info_hash, (char*)value, value_len);
-			}
+			storage_store(D, info_hash, (char*)value, value_len);
 			send_synr(D, from, fromlen, tid, tid_len);
 		} else if (memcmp(q_return, "node_down", q_len) == 0) {
 			node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
