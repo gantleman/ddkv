@@ -385,6 +385,8 @@ static void send_gossip_step(pdht D, unsigned char *gid,
 	const char* buf, int len);
 static node* neighbourhoodup(pdht D, const unsigned char *id,
 	std::map<std::vector<unsigned char>, node> *r);
+static void
+send_nodedown(pdht D, const unsigned char * id, unsigned char* gid);
 
 #ifdef __GNUC__
 __attribute__ ((format (printf, 2, 3)))
@@ -738,22 +740,17 @@ del_node(pdht D, const unsigned char *id, int af)
 static int
 expire_buckets(pdht D, std::map<std::vector<unsigned char>, node> *routetable)
 {
-	int nr = 0;// The next refresh
 	std::map<std::vector<unsigned char>, node>::iterator iter = routetable->begin();
 	for (; iter != routetable->end();) {
 		if (iter->second.pinged >= 3 && D->now.tv_sec - iter->second.pinged_time > 2) {
+			send_nodedown(D, iter->second.id, 0);
+		} else if (iter->second.pinged >= 3 && D->now.tv_sec - iter->second.pinged_time > 20*60) {
 			iter = routetable->erase(iter);
-		} else if (iter->second.pinged >= 3) {
-			nr = 1;
-			iter++;
 		} else
 			iter++;
 	}
 
-	if (nr = 1)
-		D->expire_buckets_time = D->now.tv_sec;
-	else
-		D->expire_buckets_time = D->now.tv_sec + random() % 10;
+	D->expire_buckets_time = D->now.tv_sec + random() % 10;
 	return 1;
 }
 
@@ -1898,7 +1895,7 @@ send_nodeup(pdht D, const unsigned char * id, unsigned char* gid)
 	send_gossip_step(D, gid, so.c_str(), so.size());
 }
 
-void
+static void
 send_nodedown(pdht D, const unsigned char * id, unsigned char* gid)
 {
 	unsigned char tid[4];
@@ -2319,6 +2316,19 @@ int code, const char *message)
 	b_insert(e, "", (unsigned char*)message, message_len);
 	b_package(&out, so);
 	return dht_send(D, so.c_str(), so.size(), 0, sa, salen);
+}
+
+static int
+is_gossip(pdht D, unsigned char *gid)
+{
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], gid, IDLEN);
+
+	std::map<std::vector<unsigned char>, time_t>::iterator iterg = D->gossip.find(k);
+	if (iterg == D->gossip.end())
+		return 0;
+	return 1;
 }
 
 static void
@@ -2978,45 +2988,46 @@ const struct sockaddr *from, int fromlen
 			if (nid_len == 0)
 				goto dontread;
 
-			debugf(D, "revice node_up.\n");
-			node* nf = new_node(D, id, from, fromlen, 2);
-			debugf_hex(D, "fromid:", nf->id, IDLEN);
-			node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-			if (id_cmp(n->id, id) == 0) {
-				if (neighbourhooddown_distance(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)){
-					std::vector<node*> v;
-					neighbourhooddown(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
+			if (!is_gossip(D, gid)) {
+				debugf(D, "revice node_up.\n");
+				node* nf = new_node(D, id, from, fromlen, 2);
+				debugf_hex(D, "fromid:", nf->id, IDLEN);
+				node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+				if (id_cmp(n->id, id) == 0 && n->sync_key.empty()) {
+					if (neighbourhooddown_distance(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
+						std::vector<node*> v;
+						neighbourhooddown(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
+						const unsigned char* key;
+						peer* p = enum_storage(D, 0, &key, v);
+						if (0 != p) {
+							char IPdotdec[20];
+							debugf(D, "send syn to neighbourhood");
+							send_syn(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
+							n->sync_key.resize(IDLEN);
+							memcpy(&n->syn_key[0], key, IDLEN);
+							n->syn_time = D->now.tv_sec;
+							if (nf) pinged(D, nf);
+						}
+					}
+				}
+
+				n = neighbourhooddown(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+				if (id_cmp(n->id, id) == 0 && n->sync_key.empty()) {
+					node * down = neighbourhooddown(D, n->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 					const unsigned char* key;
-					peer* p = enum_storage(D, 0, &key, v);
+					peer* p = enum_storage(D, id, D->myid, down->id, 0, &key);
 					if (0 != p) {
-						char IPdotdec[20];
-						debugf(D, "send syn to neighbourhood");
-						send_syn(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
+						debugf(D, "send sync to neighbourhood");
+						send_sync(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
 						n->sync_key.resize(IDLEN);
-						memcpy(&n->syn_key[0], key, IDLEN);
-						n->syn_time = D->now.tv_sec;
+						memcpy(&n->sync_key[0], key, IDLEN);
+						n->sync_time = D->now.tv_sec;
 						if (nf) pinged(D, nf);
 					}
 				}
 			}
-
-			n = neighbourhooddown(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-			if (id_cmp(n->id, id)==0){
-				node * down = neighbourhooddown(D, n->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-				const unsigned char* key;
-				peer* p = enum_storage(D, id, D->myid, down->id, 0, &key);
-				if (0 != p) {
-					debugf(D, "send sync to neighbourhood");
-					send_sync(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
-					n->sync_key.resize(IDLEN);
-					memcpy(&n->sync_key[0], key, IDLEN);
-					n->sync_time = D->now.tv_sec;
-					if (nf) pinged(D, nf);
-				}
-			}
 			send_nodeup(D, nid, gid);
 		} else if (memcmp(q_return, "sync", q_len) == 0) {
-			//检查是存在如果不存在就写入
 			debugf(D, "send sync to neighbourhood");
 			unsigned char *info_hash;
 			int info_hash_len;
@@ -3089,26 +3100,29 @@ const struct sockaddr *from, int fromlen
 			if (nid_len == 0)
 				goto dontread;
 
-			debugf(D, "node down!\n");
-			node* nf = new_node(D, id, from, fromlen, 2);
-			node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-			if (id_cmp(n->id, id) == 0) {
-				if (neighbourhooddown_distance(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
-					std::vector<node*> v;
-					neighbourhooddown(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
-					const unsigned char* key;
-					peer* p = enum_storage(D, 0, &key, v);
-					if (0 != p) {
-						debugf(D, "send syn!\n");
-						send_syn(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
-						n->sync_key.resize(IDLEN);
-						memcpy(&n->syn_key[0], key, IDLEN);
-						n->syn_time = D->now.tv_sec;
-						if (nf) pinged(D, nf);
+			if (!is_gossip(D, gid)) {
+				debugf(D, "node down!\n");
+				new_node(D, id, from, fromlen, 2);
+				node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+				n->pinged=3;
+				node* sn = neighbourhoodup(D, n->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+				if (id_cmp(n->id, nid) == 0 && n->sync_key.empty()) {
+					if (neighbourhooddown_distance(D, nid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
+						std::vector<node*> v;
+						neighbourhooddown(D, nid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
+						const unsigned char* key;
+						peer* p = enum_storage(D, 0, &key, v);
+						if (0 != p) {
+							debugf(D, "send syn!\n");
+							send_syn(D, (const struct sockaddr *)&sn->ss, sn->sslen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
+							n->sync_key.resize(IDLEN);
+							memcpy(&n->syn_key[0], key, IDLEN);
+							n->syn_time = D->now.tv_sec;
+							if (sn) pinged(D, sn);
+						}
 					}
 				}
 			}
-
 			send_nodedown(D, nid, gid);
 		}
 
