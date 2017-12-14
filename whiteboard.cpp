@@ -387,6 +387,9 @@ static void
 send_nodedown(pdht D, const unsigned char * id, unsigned char* gid);
 static void
 node_ponged(pdht D, const unsigned char *id, const struct sockaddr *sa, int salen);
+static void
+del_node(pdht D, const unsigned char *id);
+
 #ifdef __GNUC__
 __attribute__ ((format (printf, 2, 3)))
 #endif
@@ -666,6 +669,23 @@ node_blacklisted(pdht D, const struct sockaddr *sa, int salen)
 
 	return 0;
 }
+static void
+del_node(pdht D, const unsigned char *id)
+{
+	if (id_cmp(id, D->myid) == 0)
+		return;
+
+	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+	r->erase(k);
+
+	r = &D->routetable6;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+	r->erase(k);
+}
 
 /* We just learnt about a node, not necessarily a new one.  Confirm is 1 if
    the node sent a message, 2 if it sent us a reply. */
@@ -746,13 +766,12 @@ expire_buckets(pdht D, std::map<std::vector<unsigned char>, node> *routetable)
 	std::map<std::vector<unsigned char>, node>::iterator iter = routetable->begin();
 	for (; iter != routetable->end();) {
 		if (iter->second.pinged >= 3 && D->now.tv_sec - iter->second.pinged_time > 2) {
+			node_blacklisted(D, (const struct sockaddr *)&iter->second.ss, iter->second.sslen);
 			send_nodedown(D, iter->second.id, 0);
-		} else if (iter->second.pinged >= 3 && D->now.tv_sec - iter->second.pinged_time > 20*60) {
 			iter = routetable->erase(iter);
 		} else
 			iter++;
 	}
-
 	D->expire_buckets_time = D->now.tv_sec + random() % 10;
 	return 1;
 }
@@ -3071,7 +3090,6 @@ const struct sockaddr *from, int fromlen
 			if (!is_gossip(D, gid)) {
 				debugf(D, "node down!\n");
 				node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-				n->pinged=3;
 				node* sn = neighbourhoodup(D, n->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 				if (id_cmp(n->id, nid) == 0 && n->sync_key.empty()) {
 					if (neighbourhooddown_distance(D, nid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
@@ -3089,6 +3107,12 @@ const struct sockaddr *from, int fromlen
 						}
 					}
 				}
+				///delete node;
+				n = find_node(D, nid, AF_INET);
+				node_blacklisted(D, (const struct sockaddr *)&n->ss, n->sslen);
+				n = find_node(D, nid, AF_INET6);
+				node_blacklisted(D, (const struct sockaddr *)&n->ss, n->sslen);
+				del_node(D, nid);
 			}
 			send_nodedown(D, nid, gid);
 		}
