@@ -187,8 +187,6 @@ struct node {
 	unsigned char id[IDLEN];
 	struct sockaddr_storage ss;
 	int sslen;
-	time_t time;                /* time of last message received */
-	time_t reply_time;          /* time of last correct reply received */
 	time_t pinged_time;         /* time of last request */
 	int pinged;                 /* how many requests we sent since last reply */
 	std::vector<unsigned char> syn_key;/*Syn data for the first landing,recode laste key*/
@@ -387,7 +385,8 @@ static node* neighbourhoodup(pdht D, const unsigned char *id,
 	std::map<std::vector<unsigned char>, node> *r);
 static void
 send_nodedown(pdht D, const unsigned char * id, unsigned char* gid);
-
+static void
+node_ponged(pdht D, const unsigned char *id, const struct sockaddr *sa, int salen);
 #ifdef __GNUC__
 __attribute__ ((format (printf, 2, 3)))
 #endif
@@ -592,10 +591,29 @@ unsigned short *seqno_return)
 /* Called whenever we send a request to a node, increases the ping count
    and, if that reaches 3, sends a ping to a new candidate. */
 static void
-pinged(pdht D, struct node *n)
+node_pinged(pdht D, struct node *n)
 {
 	n->pinged++;
 	n->pinged_time = D->now.tv_sec;
+}
+
+static void
+node_ponged(pdht D, const unsigned char *id, const struct sockaddr *sa, int salen)
+{
+	if (id_cmp(id, D->myid) == 0)
+		return;
+
+	std::map<std::vector<unsigned char>, node> *r = sa->sa_family == AF_INET ? &D->routetable : &D->routetable6;
+	std::vector<unsigned char> k;
+	k.resize(IDLEN);
+	memcpy(&k[0], id, IDLEN);
+
+	std::map<std::vector<unsigned char>, node>::iterator iter = r->find(k);
+	if (iter != r->end()) {
+		struct node *n = &iter->second;
+		n->pinged = 0;
+		n->pinged_time = 0;
+	} 
 }
 
 /* The internal blacklist is an LRU cache of nodes that have sent
@@ -614,7 +632,7 @@ blacklist_node(pdht D, const unsigned char *id, const struct sockaddr *sa, int s
 		n = find_node(D, id, sa->sa_family);
 		if (n) {
 			n->pinged = 3;
-			pinged(D, n);
+			node_pinged(D, n);
 		}
 		/* Discard it from any searches in progress. */
 		sr = D->searches;
@@ -667,22 +685,7 @@ int confirm)
 	memcpy(&k[0], id, IDLEN);
 
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->find(k);
-	if (iter != r->end()) {
-		struct node *n = &iter->second;
-		if (confirm || n->time < D->now.tv_sec - 15 * 60) {
-			/* Known node.  Update stuff. */
-			memcpy((struct sockaddr*)&n->ss, sa, salen);
-			if (confirm)
-				n->time = D->now.tv_sec;
-			if (confirm >= 2) {
-				n->reply_time = D->now.tv_sec;
-				n->pinged = 0;
-				n->pinged_time = 0;
-			}
-		}
-
-		return n;
-	} else {
+	if (iter == r->end()) {
 		//new node
 		struct node* n = &(*r)[k];
 		if (sa->sa_family == AF_INET)
@@ -694,8 +697,8 @@ int confirm)
 		memcpy(n->id, id, IDLEN);
 		memcpy(&n->ss, sa, salen);
 		n->sslen = salen;
-		n->time = confirm ? D->now.tv_sec : 0;
-		n->reply_time = confirm >= 2 ? D->now.tv_sec : 0;
+		n->pinged = 0;
+		n->pinged_time = D->now.tv_sec;
 		return n;
 	}
 	return 0;
@@ -895,7 +898,7 @@ search_send(pdht D, struct search *sr, struct search_node *n)
 	/* If the node happens to be in our main routing table, mark it
 	as pinged. */
 	node = find_node(D, n->id, n->ss.ss_family);
-	if (node) pinged(D, node);
+	if (node) node_pinged(D, node);
 	return 1;
 }
 
@@ -948,7 +951,7 @@ search_step(pdht D, struct search *sr)
 					n->pinged++;
 					n->request_time = D->now.tv_sec;
 					node = find_node(D, n->id, n->ss.ss_family);
-					if (node) pinged(D, node);
+					if (node) node_pinged(D, node);
 					break;
 				}
 				if (!sendap) {
@@ -989,7 +992,7 @@ search_step(pdht D, struct search *sr)
 					n->pinged++;
 					n->request_time = D->now.tv_sec;
 					node = find_node(D, n->id, n->ss.ss_family);
-					if (node) pinged(D, node);
+					if (node) node_pinged(D, node);
 					break;
 				}
 				if (!sendap) {
@@ -1265,15 +1268,13 @@ int *incoming_return)
 {
 	pdht D = (pdht)iD;
 	debugf(D, "dht_nodes.\n");
-	int good = 0, dubious = 0, incoming = 0;
+	int good = 0, dubious = 0;
 	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->begin();
 	for (; iter != r->end(); iter++) {
 		node *n = &iter->second;
 		if (node_good(D, n)) {
 			good++;
-			if (n->time > n->reply_time)
-				incoming++;
 		} else {
 			dubious++;
 		}
@@ -1283,8 +1284,6 @@ int *incoming_return)
 		*good_return = good;
 	if (dubious_return)
 		*dubious_return = dubious;
-	if (incoming_return)
-		*incoming_return = incoming;
 	return good + dubious;
 }
 
@@ -1319,12 +1318,6 @@ dump_bucket(pdht D, FILE *f, std::map<std::vector<unsigned char>, node> *r)
 			fprintf(f, " [%s]:%d ", buf, port);
 		else
 			fprintf(f, " %s:%d ", buf, port);
-		if (n->time != n->reply_time)
-			fprintf(f, "age %ld, %ld",
-			(long)(D->now.tv_sec - n->time),
-			(long)(D->now.tv_sec - n->reply_time));
-		else
-			fprintf(f, "age %ld", (long)(D->now.tv_sec - n->time));
 		if (n->pinged)
 			fprintf(f, " (%d)", n->pinged);
 		if (node_good(D, n))
@@ -1513,8 +1506,8 @@ neighbourhood_maintenance(pdht D, int af)
 		make_tid(tid, "fn", 0);
 		send_find_node(D, (struct sockaddr*)&n->ss, n->sslen,
 			tid, 4, D->myid, want,
-			n->reply_time >= D->now.tv_sec - 15);
-		pinged(D, n);
+			0);
+		node_pinged(D, n);
 		return 1;
 	}
 	return 0;
@@ -1543,8 +1536,8 @@ bucket_maintenance(pdht D, int af)
 		make_tid(tid, "fn", 0);
 		send_find_node(D, (struct sockaddr*)&n->ss, n->sslen,
 			tid, 4, id, want,
-			n->reply_time >= D->now.tv_sec - 15);
-		pinged(D, n);
+			0);
+		node_pinged(D, n);
 		/* In order to avoid sending queries back-to-back,
 		give up for now and reschedule us soon. */
 		return 1;
@@ -1742,13 +1735,13 @@ time_t *tosleep)
 		D->ping_neighbourhood_time = D->now.tv_sec;
 		node* n = neighbourhoodup(D, D->myid, &D->routetable);
 		if (n) {
-			pinged(D, n);
+			node_pinged(D, n);
 			dht_ping_node(D, (const struct sockaddr *)&n->ss, n->sslen);
 		}
 
 		n = neighbourhoodup(D, D->myid, &D->routetable6);
 		if (n) {
-			pinged(D, n);
+			node_pinged(D, n);
 			dht_ping_node(D, (const struct sockaddr *)&n->ss, n->sslen);
 		}
 	}
@@ -2399,6 +2392,7 @@ const struct sockaddr *from, int fromlen
 		if (id_len == 0)
 			goto dontread;
 
+		node_ponged(D, id, from, fromlen);
 		if (tid_len != 4) {
 			debugf(D, "Broken node truncates transaction ids: ");
 			debug_printable(D, (unsigned char *)buf, buflen);
@@ -2411,7 +2405,6 @@ const struct sockaddr *from, int fromlen
 		}
 		if (tid_match(tid, "pn", NULL)) {
 			debugf(D, "Pong!\n");
-			new_node(D, id, from, fromlen, 2);
 		} else if (tid_match(tid, "gp", NULL)) {
 			int gp = 0;
 			struct search *sr = NULL;
@@ -2432,10 +2425,8 @@ const struct sockaddr *from, int fromlen
 				blacklist_node(D, id, from, fromlen);
 			} else if (gp && sr == NULL) {
 				debugf(D, "Unknown search!\n");
-				new_node(D, id, from, fromlen, 1);
 			} else {
 				int i;
-				new_node(D, id, from, fromlen, 2);
 				for (i = 0; i < nodes_len / 26; i++) {
 					unsigned char *ni = nodes + i * 26;
 					struct sockaddr_in sin;
@@ -2445,7 +2436,6 @@ const struct sockaddr *from, int fromlen
 					sin.sin_family = AF_INET;
 					memcpy(&sin.sin_addr, ni + IDLEN, 4);
 					memcpy(&sin.sin_port, ni + 24, 2);
-					new_node(D, ni, (struct sockaddr*)&sin, sizeof(sin), 0);
 					if (sr && sr->af == AF_INET) {
 						insert_search_node(D, ni,
 							(struct sockaddr*)&sin,
@@ -2462,7 +2452,6 @@ const struct sockaddr *from, int fromlen
 					sin6.sin6_family = AF_INET6;
 					memcpy(&sin6.sin6_addr, ni + IDLEN, 16);
 					memcpy(&sin6.sin6_port, ni + 36, 2);
-					new_node(D, ni, (struct sockaddr*)&sin6, sizeof(sin6), 0);
 					if (sr && sr->af == AF_INET6) {
 						insert_search_node(D, ni,
 							(struct sockaddr*)&sin6,
@@ -2520,10 +2509,8 @@ const struct sockaddr *from, int fromlen
 				blacklist_node(D, id, from, fromlen);
 			} else if (sh && sr == NULL) {
 				debugf(D, "Unknown search!\n");
-				new_node(D, id, from, fromlen, 1);
 			} else {
 				int i;
-				new_node(D, id, from, fromlen, 2);
 				for (i = 0; i < nodes_len / 26; i++) {
 					unsigned char *ni = nodes + i * 26;
 					struct sockaddr_in sin;
@@ -2533,7 +2520,6 @@ const struct sockaddr *from, int fromlen
 					sin.sin_family = AF_INET;
 					memcpy(&sin.sin_addr, ni + IDLEN, 4);
 					memcpy(&sin.sin_port, ni + 24, 2);
-					new_node(D, ni, (struct sockaddr*)&sin, sizeof(sin), 0);
 					if (sr && sr->af == AF_INET) {
 						insert_search_node(D, ni,
 							(struct sockaddr*)&sin,
@@ -2550,7 +2536,6 @@ const struct sockaddr *from, int fromlen
 					sin6.sin6_family = AF_INET6;
 					memcpy(&sin6.sin6_addr, ni + IDLEN, 16);
 					memcpy(&sin6.sin6_port, ni + 36, 2);
-					new_node(D, ni, (struct sockaddr*)&sin6, sizeof(sin6), 0);
 					if (sr && sr->af == AF_INET6) {
 						insert_search_node(D, ni,
 							(struct sockaddr*)&sin6,
@@ -2585,7 +2570,6 @@ const struct sockaddr *from, int fromlen
 				blacklist_node(D, id, from, fromlen);
 			} else {
 				int i;
-				new_node(D, id, from, fromlen, 2);
 				for (i = 0; i < nodes_len / 26; i++) {
 					unsigned char *ni = nodes + i * 26;
 					struct sockaddr_in sin;
@@ -2615,10 +2599,8 @@ const struct sockaddr *from, int fromlen
 			sr = find_search(D, ttid, from->sa_family);
 			if (!sr) {
 				debugf(D, "error Unknown search!\n");
-				new_node(D, id, from, fromlen, 1);
 			} else {
 				int i;
-				new_node(D, id, from, fromlen, 2);
 				for (i = 0; i < sr->numnodes; i++)
 					if (id_cmp(sr->nodes[i].id, id) == 0) {
 						sr->nodes[i].request_time = 0;
@@ -2638,7 +2620,6 @@ const struct sockaddr *from, int fromlen
 				goto dontread;
 
 			debugf(D, "Got reply to sync!\n");
-			new_node(D, id, from, fromlen, 2);
 			///return sync		
 			node * up = neighbourhoodup(D, mid->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 			node * down = neighbourhooddown(D, mid->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
@@ -2662,7 +2643,6 @@ const struct sockaddr *from, int fromlen
 			if (n && n->syn_key.empty())
 				goto dontread;
 			debugf(D, "Got reply to syn!\n");
-			new_node(D, id, from, fromlen, 2);
 			if (neighbourhooddown_distance(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
 				std::vector<node*> v;
 				neighbourhooddown(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
@@ -2704,7 +2684,6 @@ const struct sockaddr *from, int fromlen
 
 		if (memcmp(q_return, "ping", q_len) == 0) {
 			debugf(D, "Ping (%d)!\n", tid_len);
-			new_node(D, id, from, fromlen, 1);
 			debugf(D, "Sending pong.\n");
 			send_pong(D, from, fromlen, tid, tid_len);
 		} else if (memcmp(q_return, "find_node", q_len) == 0) {
@@ -2733,7 +2712,6 @@ const struct sockaddr *from, int fromlen
 			}
 
 			debugf(D, "Find node!\n");
-			new_node(D, id, from, fromlen, 1);
 			debugf(D, "Sending closest nodes (%d).\n", want);
 			send_closest_nodes(D, from, fromlen,
 				tid, tid_len, target, want,
@@ -2781,7 +2759,6 @@ const struct sockaddr *from, int fromlen
 
 			debugf(D, "Get_peers!\n");
 			debugf_hex(D, "tid:", tid, tid_len);
-			new_node(D, id, from, fromlen, 1);
 			if (id_cmp(info_hash, zeroes) == 0) {
 				debugf(D, "Eek!  Got get_peers with no info_hash.\n");
 				send_error(D, from, fromlen, tid, tid_len,
@@ -2826,7 +2803,7 @@ const struct sockaddr *from, int fromlen
 						send_get_peers(D, n->ss.ss_family == AF_INET ? (struct sockaddr*)&order_in : (struct sockaddr*)&order_in6,
 							n->ss.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6),
 							(struct sockaddr*)&n->ss, n->sslen, tid, 4, info_hash, -1,
-							n->reply_time >= D->now.tv_sec - 15, isequence);
+							0, isequence);
 					} else {
 						debugf(D, "Sending nodes for get_peers.\n");
 						send_closest_nodes(D, to, to_len,
@@ -2862,7 +2839,6 @@ const struct sockaddr *from, int fromlen
 
 			debugf(D, "search!\n");
 			debugf_hex(D, "tid:", tid, tid_len);
-			new_node(D, id, from, fromlen, 1);
 			if (id_cmp(info_hash, zeroes) == 0) {
 				debugf(D, "Eek!  Got get_peers with no info_hash.\n");
 				send_error(D, from, fromlen, tid, tid_len,
@@ -2913,7 +2889,6 @@ const struct sockaddr *from, int fromlen
 				goto dontread;
 
 			debugf(D, "Announce peer!\n");
-			new_node(D, id, from, fromlen, 1);
 			if (id_cmp(info_hash, zeroes) == 0) {
 				debugf(D, "error Announce_peer with no info_hash.\n");
 				send_error(D, from, fromlen, tid, tid_len,
@@ -2971,7 +2946,7 @@ const struct sockaddr *from, int fromlen
 					tid, 4, info_hash, IDLEN,
 					(unsigned char*)value, value_len,
 					token, token_len,
-					n->reply_time >= D->now.tv_sec - 15, isequence);
+					0, isequence);
 			} else
 				debugf(D, "at %d not find neighbourhoodup.\n", isequence);
 		} else if (memcmp(q_return, "node_up", q_len) == 0) {
@@ -3000,13 +2975,12 @@ const struct sockaddr *from, int fromlen
 						const unsigned char* key;
 						peer* p = enum_storage(D, 0, &key, v);
 						if (0 != p) {
-							char IPdotdec[20];
 							debugf(D, "send syn to neighbourhood");
 							send_syn(D, from, fromlen, (unsigned char*)key, (unsigned char*)&p->buf[0], p->buf.size());
 							n->sync_key.resize(IDLEN);
 							memcpy(&n->syn_key[0], key, IDLEN);
 							n->syn_time = D->now.tv_sec;
-							if (nf) pinged(D, nf);
+							if (nf) node_pinged(D, nf);
 						}
 					}
 				}
@@ -3022,7 +2996,7 @@ const struct sockaddr *from, int fromlen
 						n->sync_key.resize(IDLEN);
 						memcpy(&n->sync_key[0], key, IDLEN);
 						n->sync_time = D->now.tv_sec;
-						if (nf) pinged(D, nf);
+						if (nf) node_pinged(D, nf);
 					}
 				}
 			}
@@ -3040,9 +3014,6 @@ const struct sockaddr *from, int fromlen
 			b_find(a, "value", &value, value_len);
 			
 			debugf(D, "sync!\n");
-			node* nf = new_node(D, id, from, fromlen, 2);
-			if (nf) pinged(D, nf);
-
 			if (value_len != 0) {
 				debugf(D, "sync storage!\n");
 				peer* p = find_storage(D, info_hash);
@@ -3069,10 +3040,7 @@ const struct sockaddr *from, int fromlen
 			int value_len;
 			b_find(a, "value", &value, value_len);
 
-			debugf(D, "syn!\n");
-			node* nf = new_node(D, id, from, fromlen, 2);
-			if (nf) pinged(D, nf);
-			
+			debugf(D, "syn!\n");			
 			if (value_len != 0) {
 				debugf(D, "syn storage!\n");
 				storage_store(D, info_hash, (char*)value, value_len);
@@ -3102,7 +3070,6 @@ const struct sockaddr *from, int fromlen
 
 			if (!is_gossip(D, gid)) {
 				debugf(D, "node down!\n");
-				new_node(D, id, from, fromlen, 2);
 				node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
 				n->pinged=3;
 				node* sn = neighbourhoodup(D, n->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
@@ -3118,7 +3085,7 @@ const struct sockaddr *from, int fromlen
 							n->sync_key.resize(IDLEN);
 							memcpy(&n->syn_key[0], key, IDLEN);
 							n->syn_time = D->now.tv_sec;
-							if (sn) pinged(D, sn);
+							if (sn) node_pinged(D, sn);
 						}
 					}
 				}
