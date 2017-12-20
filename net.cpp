@@ -480,11 +480,10 @@ int main(int argc, char **argv)
 				}
 				else if (pcmd[0] == 'n') {
 					struct sockaddr_in sin[500];
-					struct sockaddr_in6 sin6[500];
-					int num = 500, num6 = 500;
+					int num = 500;
 					int i;
-					i = dht_get_nodes(D, sin, &num, sin6, &num6);
-					printf("Found %d (%d + %d) good nodes.\n", i, num, num6);					
+					i = dht_get_nodes(D, sin, &num);
+					printf("Found %d (%d + %d) good nodes.\n", i, num);					
 				}
 			}
         } else {

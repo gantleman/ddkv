@@ -50,8 +50,7 @@ int dht_nodes(DHT D, int af,
               int *good_return, int *dubious_return,
               int *incoming_return);
 void dht_dump_tables(DHT D, FILE *f);
-int dht_get_nodes(DHT D, struct sockaddr_in *sin, int *num,
-                  struct sockaddr_in6 *sin6, int *num6);
+int dht_get_nodes(DHT D, struct sockaddr_in *sin, int *num);
 int dht_uninit(DHT D);
 
 /* This must be provided by the user. */

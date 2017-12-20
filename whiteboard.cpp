@@ -185,7 +185,7 @@ const void *needle, size_t needlelen)
 #define IDLEN 20
 struct node {
 	unsigned char id[IDLEN];
-	struct sockaddr_storage ss;
+	struct sockaddr_storage ss;//IPv6 and IPv4 are essentially the same as multiple network cards in a ID
 	int sslen;
 	time_t pinged_time;         /* time of last request */
 	int pinged;                 /* how many requests we sent since last reply */
@@ -323,7 +323,6 @@ typedef struct _dht
 	struct sockaddr_in6 sin6;
 
 	std::map<std::vector<unsigned char>, node> routetable;
-	std::map<std::vector<unsigned char>, node> routetable6;
 
 	std::map<std::vector<unsigned char>, time_t> gossip;
 	time_t gossip_expire_time;
@@ -550,7 +549,7 @@ const unsigned char *ref)
 static struct node *
 find_node(pdht D, const unsigned char *id, int af)
 {
-	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
+	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
 	std::vector<unsigned char> k;
 	k.resize(IDLEN);
 	memcpy(&k[0], id, IDLEN);
@@ -609,7 +608,7 @@ node_ponged(pdht D, const unsigned char *id, const struct sockaddr *sa, int sale
 	if (id_cmp(id, D->myid) == 0)
 		return;
 
-	std::map<std::vector<unsigned char>, node> *r = sa->sa_family == AF_INET ? &D->routetable : &D->routetable6;
+	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
 	std::vector<unsigned char> k;
 	k.resize(IDLEN);
 	memcpy(&k[0], id, IDLEN);
@@ -683,11 +682,6 @@ del_node(pdht D, const unsigned char *id)
 	k.resize(IDLEN);
 	memcpy(&k[0], id, IDLEN);
 	r->erase(k);
-
-	r = &D->routetable6;
-	k.resize(IDLEN);
-	memcpy(&k[0], id, IDLEN);
-	r->erase(k);
 }
 
 /* We just learnt about a node, not necessarily a new one.  Confirm is 1 if
@@ -701,7 +695,7 @@ new_node(pdht D, const unsigned char *id, const struct sockaddr *sa, int salen)
 	if (is_martian(D, sa) || node_blacklisted(D, sa, salen))
 		return NULL;
 
-	std::map<std::vector<unsigned char>, node> *r = sa->sa_family == AF_INET ? &D->routetable : &D->routetable6;
+	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
 	std::vector<unsigned char> k;
 	k.resize(IDLEN);
 	memcpy(&k[0], id, IDLEN);
@@ -732,7 +726,7 @@ new_node(pdht D, const unsigned char *id, const struct sockaddr *sa, int salen)
 static int
 del_node(pdht D, const unsigned char *id, int af)
 {
-	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
+	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
 	std::vector<unsigned char> k, myk;
 	k.resize(IDLEN);
 	memcpy(&k[0], id, IDLEN);
@@ -1093,7 +1087,7 @@ new_search(pdht D)
 static void
 insert_search_bucket(pdht D, struct search *sr)
 {
-	std::map<std::vector<unsigned char>, node> *r = sr->af == AF_INET ? &D->routetable : &D->routetable6;
+	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->begin();
 	for (; iter != r->end(); iter++) {
 		struct node *n = &iter->second;
@@ -1293,7 +1287,7 @@ int *incoming_return)
 	pdht D = (pdht)iD;
 	debugf(D, "dht_nodes.\n");
 	int good = 0, dubious = 0;
-	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
+	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
 	std::map<std::vector<unsigned char>, node>::iterator iter = r->begin();
 	for (; iter != r->end(); iter++) {
 		node *n = &iter->second;
@@ -1366,9 +1360,6 @@ dht_dump_tables(DHT iD, FILE *f)
 	dump_bucket(D, f, b);
 
 	fprintf(f, "\n");
-
-	b = &D->routetable6;
-	dump_bucket(D, f, b);
 
 	while (sr) {
 		fprintf(f, "\nSearch%s id ", sr->af == AF_INET6 ? " (IPv6)" : "");
@@ -1460,7 +1451,6 @@ struct sockaddr_in &sin, struct sockaddr_in6 &sin6)
 	D->dht_socket6 = s6;
 
 	expire_buckets(D, &D->routetable);
-	expire_buckets(D, &D->routetable6);
 
 	memcpy(&D->sin, &sin, sizeof(sockaddr_in));
 	memcpy(&D->sin6, &sin6, sizeof(sockaddr_in6));
@@ -1515,7 +1505,7 @@ token_bucket(pdht D)
 static int
 neighbourhood_maintenance(pdht D, int af)
 {
-	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
+	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
 	if (0 == r->size())
 		return 0;
 
@@ -1542,7 +1532,7 @@ neighbourhood_maintenance(pdht D, int af)
 static int
 bucket_maintenance(pdht D, int af)
 {
-	std::map<std::vector<unsigned char>, node> *r = af == AF_INET ? &D->routetable : &D->routetable6;
+	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
 	if (0 == r->size())
 		return 0;
 
@@ -1687,7 +1677,7 @@ time_t *tosleep)
 	*tosleep = 1;
 	dht_gettimeofday(&D->now, NULL);
 
-	if (D->node_down == 0 && D->now.tv_sec - D->down_time > 60) {
+	if (D->node_down == 0 && D->now.tv_sec - D->down_time > 60 && !(D->routetable.empty() && D->routetable.empty())) {
 		D->node_down = 1;
 		send_nodedown(D, D->myid, 0);
 	}
@@ -1708,7 +1698,6 @@ time_t *tosleep)
 
 	if (D->now.tv_sec >= D->expire_buckets_time) {
 		expire_buckets(D, &D->routetable);
-		expire_buckets(D, &D->routetable6);
 	}
 
 	if (D->now.tv_sec - D->expire_stuff_time > 30 * 60) {
@@ -1769,19 +1758,12 @@ time_t *tosleep)
 			node_pinged(D, n);
 			dht_ping_node(D, (const struct sockaddr *)&n->ss, n->sslen);
 		}
-
-		n = neighbourhoodup(D, D->myid, &D->routetable6);
-		if (n) {
-			node_pinged(D, n);
-			dht_ping_node(D, (const struct sockaddr *)&n->ss, n->sslen);
-		}
 	}
 	return 1;
 }
 
 int
-dht_get_nodes(DHT iD, struct sockaddr_in *sin, int *num,
-struct sockaddr_in6 *sin6, int *num6)
+dht_get_nodes(DHT iD, struct sockaddr_in *sin, int *num)
 {
 	pdht D = (pdht)iD;
 	std::map<std::vector<unsigned char>, node> *r = &D->routetable;
@@ -1798,21 +1780,8 @@ struct sockaddr_in6 *sin6, int *num6)
 
 	}
 
-	r = &D->routetable6;
-	int j = 0;
-	for (; iter != r->end(); iter++) {
-		node* n = &iter->second;
-		if (j <= *num6) {
-			if (node_good(D, n) && j <= *num6) {
-				sin6[j++] = *(struct sockaddr_in6*)&n->ss;
-			}
-		} else
-			break;
-	}
-
 	*num = i;
-	*num6 = j;
-	return i + j;
+	return i;
 }
 
 int
@@ -2214,9 +2183,6 @@ const unsigned char *token, int token_len)
 		numnodes = buffer_closest_nodes(D, nodes, numnodes, id, &D->routetable);
 	}
 
-	if ((want & WANT6)) {
-		numnodes = buffer_closest_nodes(D, nodes6, numnodes6, id, &D->routetable6);
-	}
 	debugf(D, "  (%d+%d nodes.)\n", numnodes, numnodes6);
 
 	return send_nodes_peers(D, sa, salen, tid, tid_len,
@@ -2384,10 +2350,6 @@ send_gossip_step(pdht D, unsigned char *gid, const char* buf, int len)
 	std::map<std::vector<unsigned char>, node>::iterator iter = D->routetable.begin();
 	for (; iter != D->routetable.end(); iter++) {
 		dht_send(D, buf, len, 0, (const sockaddr *)&iter->second.ss, iter->second.sslen);
-	}
-	std::map<std::vector<unsigned char>, node>::iterator iter6 = D->routetable6.begin();
-	for (; iter6 != D->routetable.end(); iter6++) {
-		dht_send(D, buf, len, 0, (const sockaddr *)&iter6->second.ss, iter6->second.sslen);
 	}
 }
 
@@ -2666,8 +2628,8 @@ const struct sockaddr *from, int fromlen
 
 			debugf(D, "Got reply to sync!\n");
 			///return sync		
-			node * up = neighbourhoodup(D, mid->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-			node * down = neighbourhooddown(D, mid->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+			node * up = neighbourhoodup(D, mid->id, &D->routetable);
+			node * down = neighbourhooddown(D, mid->id, &D->routetable);
 			const unsigned char* key;
 			peer* p = enum_storage(D, mid->id, up->id, down->id, (unsigned char*)&mid->sync_key[0], &key);
 			if (0 != p) {
@@ -2688,9 +2650,9 @@ const struct sockaddr *from, int fromlen
 			if (n && n->syn_key.empty())
 				goto dontread;
 			debugf(D, "Got reply to syn!\n");
-			if (neighbourhooddown_distance(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
+			if (neighbourhooddown_distance(D, id, &D->routetable, MAXANNOUNCE)) {
 				std::vector<node*> v;
-				neighbourhooddown(D, id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
+				neighbourhooddown(D, id, &D->routetable, v, MAXANNOUNCE + 1);
 				const unsigned char* key;
 				peer* p = enum_storage(D, (unsigned char*)&n->syn_key[0], &key, v);
 				if (0 != p) {
@@ -2842,7 +2804,7 @@ const struct sockaddr *from, int fromlen
 						from->sa_family, sp,
 						token, TOKEN_SIZE);
 				} else {
-					node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+					node* n = neighbourhoodup(D, D->myid, &D->routetable);
 					///It is necessary to send 3 times continuously to detect the non arrival rate
 					if (++isequence <= MAXGETPEER && n) {
 						debugf(D, "Sendin get_peers to next neighbourhood.\n");
@@ -2973,7 +2935,7 @@ const struct sockaddr *from, int fromlen
 			debugf(D, "Sending peer announced.\n");
 			send_peer_announced(D, to, to_len, tid, tid_len);
 
-			node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+			node* n = neighbourhoodup(D, D->myid, &D->routetable);
 			///It is necessary to send 3 times continuously to detect the non arrival rate
 			if (++isequence < MAXANNOUNCE && n) {
 				unsigned short port = 0;
@@ -3037,9 +2999,9 @@ const struct sockaddr *from, int fromlen
 				node* nto = new_node(D, nid, to, to_len);
 				debugf(D, "revice node_up.\n");
 				debugf_hex(D, "fromid:", nid, IDLEN);
-				node* n = neighbourhoodup(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+				node* n = neighbourhoodup(D, D->myid, &D->routetable);
 				if (id_cmp(n->id, nid) == 0 && n->sync_key.empty()) {
-					if (neighbourhooddown_distance(D, nid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
+					if (neighbourhooddown_distance(D, nid, &D->routetable, MAXANNOUNCE)) {
 						unsigned char tid[4];
 						make_tid(tid, "fn", 0);
 						send_closest_nodes(D, to, fromlen,
@@ -3047,7 +3009,7 @@ const struct sockaddr *from, int fromlen
 							0, NULL, NULL, 0);
 
 						std::vector<node*> v;
-						neighbourhooddown(D, id, to->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
+						neighbourhooddown(D, id, &D->routetable, v, MAXANNOUNCE + 1);
 						const unsigned char* key;
 						peer* p = enum_storage(D, 0, &key, v);
 						if (0 != p) {
@@ -3061,7 +3023,7 @@ const struct sockaddr *from, int fromlen
 					}
 				}
 
-				n = neighbourhooddown(D, D->myid, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+				n = neighbourhooddown(D, D->myid, &D->routetable);
 				if (id_cmp(n->id, nid) == 0 && n->sync_key.empty()) {
 					unsigned char tid[4];
 					make_tid(tid, "fn", 0);
@@ -3069,7 +3031,7 @@ const struct sockaddr *from, int fromlen
 						tid, tid_len, nid, to->sa_family == AF_INET ? WANT4 : WANT6,
 						0, NULL, NULL, 0);
 
-					node * down = neighbourhooddown(D, n->id, to->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+					node * down = neighbourhooddown(D, n->id, &D->routetable);
 					const unsigned char* key;
 					peer* p = enum_storage(D, id, D->myid, down->id, 0, &key);
 					if (0 != p) {
@@ -3151,12 +3113,12 @@ const struct sockaddr *from, int fromlen
 
 			if (!is_gossip(D, gid)) {
 				debugf(D, "node down!\n");
-				node* n = neighbourhoodup(D, D->myid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
-				node* sn = neighbourhoodup(D, n->id, from->sa_family == AF_INET ? &D->routetable : &D->routetable6);
+				node* n = neighbourhoodup(D, D->myid, &D->routetable);
+				node* sn = neighbourhoodup(D, n->id,  &D->routetable);
 				if (id_cmp(n->id, nid) == 0 && n->sync_key.empty()) {
-					if (neighbourhooddown_distance(D, nid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, MAXANNOUNCE)) {
+					if (neighbourhooddown_distance(D, nid, &D->routetable, MAXANNOUNCE)) {
 						std::vector<node*> v;
-						neighbourhooddown(D, nid, from->sa_family == AF_INET ? &D->routetable : &D->routetable6, v, MAXANNOUNCE + 1);
+						neighbourhooddown(D, nid, &D->routetable, v, MAXANNOUNCE + 1);
 						const unsigned char* key;
 						peer* p = enum_storage(D, 0, &key, v);
 						if (0 != p) {
